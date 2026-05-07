@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -35,6 +36,10 @@ func NewRouterWithStore(memoryStore *store.MemoryStore) http.Handler {
 	mux.HandleFunc("GET /workloads", app.listWorkloads)
 	mux.HandleFunc("POST /workloads", app.createWorkload)
 	mux.HandleFunc("GET /workloads/{id}", app.getWorkload)
+	mux.HandleFunc("POST /scheduler/tick", app.schedulerTick)
+	mux.HandleFunc("POST /admin/nodes/{id}/fail", app.failNode)
+	mux.HandleFunc("POST /admin/nodes/{id}/recover", app.recoverNode)
+	mux.HandleFunc("POST /admin/nodes/{id}/preempt-spot", app.preemptSpotNode)
 	return mux
 }
 
@@ -107,6 +112,54 @@ func (app *App) listEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, app.store.ListEvents())
 }
 
+func (app *App) schedulerTick(w http.ResponseWriter, r *http.Request) {
+	results, err := app.store.SchedulePendingWorkloads(app.now().UTC())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "scheduler_tick_failed")
+		return
+	}
+	app.recordEvent("scheduler_tick", "scheduler", "", "", "scheduler tick completed", nil)
+	for _, result := range results {
+		app.recordSchedulingEvent(result)
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (app *App) failNode(w http.ResponseWriter, r *http.Request) {
+	result, err := app.store.FailNode(r.PathValue("id"), app.now().UTC())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	app.recordEvent("node_failed", "admin", "", result.Node.ID, "node marked failed", nil)
+	app.recordAffectedWorkloads("workload_disrupted", result.AffectedWorkloads, result.Node.ID)
+	app.recordScheduledResults(result.Scheduled)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (app *App) recoverNode(w http.ResponseWriter, r *http.Request) {
+	result, err := app.store.RecoverNode(r.PathValue("id"), app.now().UTC())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	app.recordEvent("node_recovered", "admin", "", result.Node.ID, "node recovered", nil)
+	app.recordScheduledResults(result.Scheduled)
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (app *App) preemptSpotNode(w http.ResponseWriter, r *http.Request) {
+	result, err := app.store.PreemptSpotNode(r.PathValue("id"), app.now().UTC())
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	app.recordEvent("node_spot_preempted", "admin", "", result.Node.ID, "spot node preempted", nil)
+	app.recordAffectedWorkloads("workload_preempted", result.AffectedWorkloads, result.Node.ID)
+	app.recordScheduledResults(result.Scheduled)
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (app *App) fleetSummary(w http.ResponseWriter, r *http.Request) {
 	nodes := app.store.ListNodes()
 	workloads := app.store.ListWorkloads()
@@ -155,12 +208,7 @@ func (app *App) scheduleWorkload(id string) domain.Workload {
 		return workload
 	}
 
-	decision := result.Decision
-	if decision.Outcome == scheduler.OutcomePlaced && decision.SelectedNode != nil {
-		app.recordEvent("workload_scheduled", "scheduler", workload.ID, decision.SelectedNode.ID, decision.Reason, nil)
-	} else {
-		app.recordEvent("workload_queued", "scheduler", workload.ID, "", decision.Reason, rejectedMetadata(decision.RejectedNodes))
-	}
+	app.recordSchedulingEvent(result)
 
 	return result.Workload
 }
@@ -175,6 +223,17 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 
 func writeError(w http.ResponseWriter, status int, code string) {
 	writeJSON(w, status, map[string]string{"error": code})
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "not_found")
+	case errors.Is(err, store.ErrInvalid):
+		writeError(w, http.StatusBadRequest, "invalid_request")
+	default:
+		writeError(w, http.StatusInternalServerError, "store_error")
+	}
 }
 
 func validateWorkloadRequest(req createWorkloadRequest) error {
@@ -214,6 +273,30 @@ func (app *App) recordEvent(eventType, actor, workloadID, nodeID, message string
 		Message:    message,
 		Metadata:   metadata,
 	})
+}
+
+func (app *App) recordScheduledResults(results []store.SchedulingResult) {
+	for _, result := range results {
+		app.recordSchedulingEvent(result)
+	}
+}
+
+func (app *App) recordSchedulingEvent(result store.SchedulingResult) {
+	decision := result.Decision
+	if decision.Outcome == "" {
+		return
+	}
+	if decision.Outcome == scheduler.OutcomePlaced && decision.SelectedNode != nil {
+		app.recordEvent("workload_scheduled", "scheduler", result.Workload.ID, decision.SelectedNode.ID, decision.Reason, nil)
+		return
+	}
+	app.recordEvent("workload_queued", "scheduler", result.Workload.ID, "", decision.Reason, rejectedMetadata(decision.RejectedNodes))
+}
+
+func (app *App) recordAffectedWorkloads(eventType string, workloads []domain.Workload, nodeID string) {
+	for _, workload := range workloads {
+		app.recordEvent(eventType, "system", workload.ID, nodeID, workload.StatusReason, nil)
+	}
 }
 
 func rejectedMetadata(rejected []scheduler.RejectedNode) map[string]string {

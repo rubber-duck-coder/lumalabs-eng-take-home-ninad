@@ -22,6 +22,12 @@ type SchedulingResult struct {
 	Decision scheduler.Decision
 }
 
+type DisruptionResult struct {
+	Node              domain.Node
+	AffectedWorkloads []domain.Workload
+	Scheduled         []SchedulingResult
+}
+
 type MemoryStore struct {
 	mu        sync.RWMutex
 	workloads map[string]domain.Workload
@@ -206,6 +212,95 @@ func (s *MemoryStore) ScheduleWorkload(id string, now time.Time) (SchedulingResu
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.scheduleWorkloadLocked(id, now)
+}
+
+func (s *MemoryStore) SchedulePendingWorkloads(now time.Time) ([]SchedulingResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.schedulePendingLocked(now)
+}
+
+func (s *MemoryStore) FailNode(id string, now time.Time) (DisruptionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	node, exists := s.nodes[id]
+	if !exists {
+		return DisruptionResult{}, ErrNotFound
+	}
+
+	affected := s.evictNodeWorkloadsLocked(&node, now, domain.WorkloadStatePending, "node failed; workload re-queued")
+	node.Health = domain.NodeHealthFailed
+	node.UpdatedAt = now
+	s.nodes[id] = cloneNode(node)
+
+	scheduled, err := s.schedulePendingLocked(now)
+	if err != nil {
+		return DisruptionResult{}, err
+	}
+	return DisruptionResult{
+		Node:              cloneNode(node),
+		AffectedWorkloads: cloneWorkloads(affected),
+		Scheduled:         cloneSchedulingResults(scheduled),
+	}, nil
+}
+
+func (s *MemoryStore) RecoverNode(id string, now time.Time) (DisruptionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	node, exists := s.nodes[id]
+	if !exists {
+		return DisruptionResult{}, ErrNotFound
+	}
+
+	node.Health = domain.NodeHealthHealthy
+	node.UpdatedAt = now
+	s.nodes[id] = cloneNode(node)
+
+	scheduled, err := s.schedulePendingLocked(now)
+	if err != nil {
+		return DisruptionResult{}, err
+	}
+	return DisruptionResult{
+		Node:              cloneNode(node),
+		AffectedWorkloads: nil,
+		Scheduled:         cloneSchedulingResults(scheduled),
+	}, nil
+}
+
+func (s *MemoryStore) PreemptSpotNode(id string, now time.Time) (DisruptionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	node, exists := s.nodes[id]
+	if !exists {
+		return DisruptionResult{}, ErrNotFound
+	}
+	if node.CapacityClass != domain.CapacityClassSpot {
+		return DisruptionResult{}, ErrInvalid
+	}
+
+	affected := s.evictNodeWorkloadsLocked(&node, now, domain.WorkloadStatePending, "spot node preempted; workload re-queued")
+	node.Health = domain.NodeHealthFailed
+	node.UpdatedAt = now
+	s.nodes[id] = cloneNode(node)
+
+	scheduled, err := s.schedulePendingLocked(now)
+	if err != nil {
+		return DisruptionResult{}, err
+	}
+	return DisruptionResult{
+		Node:              cloneNode(node),
+		AffectedWorkloads: cloneWorkloads(affected),
+		Scheduled:         cloneSchedulingResults(scheduled),
+	}, nil
+}
+
+func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (SchedulingResult, error) {
+
 	workload, exists := s.workloads[id]
 	if !exists {
 		return SchedulingResult{}, ErrNotFound
@@ -258,6 +353,26 @@ func (s *MemoryStore) ScheduleWorkload(id string, now time.Time) (SchedulingResu
 	s.nodes[node.ID] = cloneNode(node)
 	s.workloads[id] = cloneWorkload(updated)
 	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, nil
+}
+
+func (s *MemoryStore) schedulePendingLocked(now time.Time) ([]SchedulingResult, error) {
+	pending := make([]scheduler.Workload, 0)
+	for _, workload := range s.workloads {
+		if workload.State == domain.WorkloadStatePending {
+			pending = append(pending, toSchedulerWorkload(workload))
+		}
+	}
+	scheduler.OrderPendingWorkloads(pending)
+
+	results := make([]SchedulingResult, 0, len(pending))
+	for _, workload := range pending {
+		result, err := s.scheduleWorkloadLocked(workload.ID, now)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
 }
 
 func (s *MemoryStore) CreateNode(node domain.Node) (domain.Node, error) {
@@ -411,6 +526,50 @@ func cloneEvent(event domain.Event) domain.Event {
 		event.Metadata = metadata
 	}
 	return event
+}
+
+func cloneWorkloads(workloads []domain.Workload) []domain.Workload {
+	out := make([]domain.Workload, 0, len(workloads))
+	for _, workload := range workloads {
+		out = append(out, cloneWorkload(workload))
+	}
+	return out
+}
+
+func cloneSchedulingResults(results []SchedulingResult) []SchedulingResult {
+	out := make([]SchedulingResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, SchedulingResult{
+			Workload: cloneWorkload(result.Workload),
+			Decision: result.Decision,
+		})
+	}
+	return out
+}
+
+func (s *MemoryStore) evictNodeWorkloadsLocked(node *domain.Node, now time.Time, state domain.WorkloadState, reason string) []domain.Workload {
+	affected := make([]domain.Workload, 0)
+	for workloadID, workload := range s.workloads {
+		if workload.State != domain.WorkloadStateRunning {
+			continue
+		}
+		if workload.Placement == nil || workload.Placement.NodeID != node.ID {
+			continue
+		}
+
+		updated := cloneWorkload(workload)
+		updated.State = state
+		updated.Placement = nil
+		updated.StatusReason = reason
+		updated.SchedulingExplanation = reason
+		updated.UpdatedAt = now
+		s.workloads[workloadID] = cloneWorkload(updated)
+		affected = append(affected, cloneWorkload(updated))
+	}
+
+	node.AllocatedGPUs = 0
+	node.RunningWorkloadIDs = nil
+	return affected
 }
 
 func toSchedulerWorkload(workload domain.Workload) scheduler.Workload {

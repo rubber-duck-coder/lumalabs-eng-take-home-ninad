@@ -172,6 +172,185 @@ func TestConcurrentWorkloadSubmissionsDoNotOverAllocate(t *testing.T) {
 	}
 }
 
+func TestSchedulerTickSchedulesPendingWorkloads(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("node-1", "A100", 4, 0, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, nil))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-pending", "A100", 2, domain.WorkloadPriorityHigh, domain.WorkloadStatePending, nil, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/scheduler/tick", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	workload, ok := memoryStore.GetWorkload("w-pending")
+	if !ok {
+		t.Fatal("expected workload")
+	}
+	if workload.State != domain.WorkloadStateRunning || workload.Placement == nil || workload.Placement.NodeID != "node-1" {
+		t.Fatalf("expected workload running on node-1, got %+v", workload)
+	}
+}
+
+func TestFailNodeEndpointRequeuesAndReschedulesAffectedWorkload(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("node-a", "A100", 4, 4, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, []string{"w-running"}))
+	_, _ = memoryStore.CreateNode(testNode("node-b", "A100", 4, 0, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, nil))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-running", "A100", 4, domain.WorkloadPriorityHigh, domain.WorkloadStateRunning, &domain.Placement{NodeID: "node-a"}, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/nodes/node-a/fail", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	failed, _ := memoryStore.GetNode("node-a")
+	if failed.Health != domain.NodeHealthFailed || failed.AllocatedGPUs != 0 {
+		t.Fatalf("expected failed node with freed allocation, got %+v", failed)
+	}
+	workload, _ := memoryStore.GetWorkload("w-running")
+	if workload.State != domain.WorkloadStateRunning || workload.Placement == nil || workload.Placement.NodeID != "node-b" {
+		t.Fatalf("expected workload rescheduled to node-b, got %+v", workload)
+	}
+}
+
+func TestRecoverNodeEndpointSchedulesPendingWorkload(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("node-1", "A100", 4, 0, domain.CapacityClassOnDemand, domain.NodeHealthRecovering, nil))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-pending", "A100", 2, domain.WorkloadPriorityHigh, domain.WorkloadStatePending, nil, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/nodes/node-1/recover", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	node, _ := memoryStore.GetNode("node-1")
+	if node.Health != domain.NodeHealthHealthy {
+		t.Fatalf("expected healthy node, got %+v", node)
+	}
+	workload, _ := memoryStore.GetWorkload("w-pending")
+	if workload.State != domain.WorkloadStateRunning {
+		t.Fatalf("expected pending workload scheduled after recovery, got %+v", workload)
+	}
+}
+
+func TestPreemptSpotNodeEndpointRequeuesAffectedWorkload(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("spot-1", "L4", 4, 2, domain.CapacityClassSpot, domain.NodeHealthHealthy, []string{"w-spot"}))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-spot", "L4", 2, domain.WorkloadPriorityNormal, domain.WorkloadStateRunning, &domain.Placement{NodeID: "spot-1"}, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/nodes/spot-1/preempt-spot", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	node, _ := memoryStore.GetNode("spot-1")
+	if node.Health != domain.NodeHealthFailed || node.AllocatedGPUs != 0 {
+		t.Fatalf("expected preempted spot node failed with freed allocation, got %+v", node)
+	}
+	workload, _ := memoryStore.GetWorkload("w-spot")
+	if workload.State != domain.WorkloadStatePending || workload.Placement != nil {
+		t.Fatalf("expected spot workload requeued without placement, got %+v", workload)
+	}
+}
+
+func TestDisruptionEndpointsReturnErrorsForInvalidRequests(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	_, _ = memoryStore.CreateNode(testNode("node-1", "A100", 4, 0, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, nil))
+	router := NewRouterWithStore(memoryStore)
+
+	tests := []struct {
+		name       string
+		path       string
+		wantStatus int
+	}{
+		{name: "missing node", path: "/admin/nodes/missing/fail", wantStatus: http.StatusNotFound},
+		{name: "non spot preemption", path: "/admin/nodes/node-1/preempt-spot", wantStatus: http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("expected status %d, got %d body=%s", tc.wantStatus, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestDisruptionEndpointRecordsEvents(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("node-a", "A100", 4, 4, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, []string{"w-running"}))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-running", "A100", 4, domain.WorkloadPriorityHigh, domain.WorkloadStateRunning, &domain.Placement{NodeID: "node-a"}, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/nodes/node-a/fail", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	events := memoryStore.ListEvents()
+	seenNodeFailed := false
+	seenDisrupted := false
+	for _, event := range events {
+		switch event.Type {
+		case "node_failed":
+			seenNodeFailed = true
+		case "workload_disrupted":
+			seenDisrupted = true
+		}
+	}
+	if !seenNodeFailed || !seenDisrupted {
+		t.Fatalf("expected node_failed and workload_disrupted events, got %+v", events)
+	}
+}
+
 func fixedTestTime() time.Time {
 	return time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+}
+
+func testNode(id, gpuType string, totalGPUs, allocatedGPUs int, capacity domain.CapacityClass, health domain.NodeHealth, running []string) domain.Node {
+	now := fixedTestTime()
+	return domain.Node{
+		ID:                 id,
+		GPUType:            gpuType,
+		TotalGPUs:          totalGPUs,
+		AllocatedGPUs:      allocatedGPUs,
+		Health:             health,
+		CapacityClass:      capacity,
+		RunningWorkloadIDs: running,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}
+}
+
+func testWorkload(id, gpuType string, gpuCount int, priority domain.WorkloadPriority, state domain.WorkloadState, placement *domain.Placement, now time.Time) domain.Workload {
+	return domain.Workload{
+		ID:              id,
+		Type:            domain.WorkloadTypeTraining,
+		GPUType:         gpuType,
+		GPUCount:        gpuCount,
+		Priority:        priority,
+		DurationSeconds: 300,
+		SpotTolerant:    true,
+		State:           state,
+		Placement:       placement,
+		SubmittedAt:     now,
+		UpdatedAt:       now,
+	}
 }

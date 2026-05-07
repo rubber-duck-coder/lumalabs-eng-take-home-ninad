@@ -26,10 +26,10 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Phase 1 backend MVP.
+- Phase: Phase 2 disruptions.
 - Last completed checkpoint: local secret-protection guardrails added and verified.
 - Active implementation: none.
-- Next recommended task: pre-commit adversarial review, initial git commit, then Phase 2 disruptions.
+- Next recommended task: commit and push Phase 2 checkpoint, then ask permission before Phase 3.
 
 ## Decision Log Index
 
@@ -53,9 +53,9 @@ At every logical checkpoint, update:
 | T009 | 1 | Add workload submit/list APIs | coordinator | done | T006,T008 | Return placement or queue reason. |
 | T010 | 2 | Add fleet summary/utilization API | coordinator | done | T008 | Admin read path added early. |
 | T011 | 2 | Add event log API | coordinator | done | T008 | Scheduler/admin visibility added early. |
-| T012 | 2 | Add node failure endpoint | backend agent | todo | T006,T008 | Disruption path. |
-| T013 | 2 | Add spot preemption endpoint | backend agent | todo | T006,T008 | Spot disruption path. |
-| T014 | 2 | Add node recovery endpoint | backend agent | todo | T006,T008 | Recovery path. |
+| T012 | 2 | Add node failure endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
+| T013 | 2 | Add spot preemption endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
+| T014 | 2 | Add node recovery endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
 | T015 | 3 | Add API integration tests | test agent | todo | T009-T014 | Real app wiring. |
 | T016 | 4 | Add frontend dashboard shell | frontend agent | todo | stable APIs | Single page first. |
 | T017 | 4 | Add workload submission UI | frontend agent | todo | T009,T016 | Enterprise flow. |
@@ -166,6 +166,46 @@ Review notes:
 
 Resume note:
 - Commit and push this guardrail checkpoint before Phase 2.
+
+### 003: Phase 2 Disruption APIs
+
+Status: done
+
+Owner: coordinator plus backend coding agent
+
+Tasks:
+- Added atomic pending queue scheduling.
+- Added scheduler tick endpoint.
+- Added node failure, recovery, and spot preemption endpoints.
+- Added store and gateway tests for disruption flows.
+
+Files:
+- `internal/store/memory.go`
+- `internal/store/memory_test.go`
+- `internal/gateway/router.go`
+- `internal/gateway/router_test.go`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `make unit`
+- `make unit` after adversarial-review fixes
+
+Decisions:
+- Disrupted workloads are requeued and immediately rescheduled when capacity exists.
+- Spot preemption marks the spot node failed, frees allocation, records preemption, and requeues affected workloads.
+- Scheduler tick is explicit and deterministic; no background timer yet.
+
+Review notes:
+- Two adversarial review agents flagged silent scheduler error swallowing and stale `RunningWorkloadIDs` eviction as commit-blocking.
+- Fixed scheduler pending pass to propagate internal scheduling errors.
+- Fixed node eviction to derive affected workloads from running placement state instead of only node bookkeeping.
+- Added regression tests for stale running-list eviction, invalid disruption requests, and disruption event emission.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Commit and push Phase 2 disruption checkpoint.
 
 ## Template
 

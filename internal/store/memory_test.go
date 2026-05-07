@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/domain"
+	"github.com/ninadsindu/luma-gpu-control-plane/internal/scheduler"
 )
 
 func TestSeededMemoryStoreNodes(t *testing.T) {
@@ -174,5 +175,259 @@ func TestScheduleWorkloadAllocatesAtomically(t *testing.T) {
 	}
 	if running != 1 || pending != 1 {
 		t.Fatalf("expected one running and one pending workload, got running=%d pending=%d", running, pending)
+	}
+}
+
+func TestSchedulePendingWorkloadsOrdersByPriorityThenSubmission(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, err := store.CreateNode(domain.Node{
+		ID:            "node-a100",
+		GPUType:       "A100",
+		TotalGPUs:     8,
+		AllocatedGPUs: 0,
+		Health:        domain.NodeHealthHealthy,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:          "low-older",
+		Type:        domain.WorkloadTypeTraining,
+		GPUType:     "A100",
+		GPUCount:    2,
+		Priority:    domain.WorkloadPriorityLow,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:          "high-newer",
+		Type:        domain.WorkloadTypeTraining,
+		GPUType:     "A100",
+		GPUCount:    2,
+		Priority:    domain.WorkloadPriorityHigh,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now.Add(2 * time.Minute),
+		UpdatedAt:   now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:          "high-older",
+		Type:        domain.WorkloadTypeTraining,
+		GPUType:     "A100",
+		GPUCount:    2,
+		Priority:    domain.WorkloadPriorityHigh,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now.Add(1 * time.Minute),
+		UpdatedAt:   now,
+	})
+
+	results, err := store.SchedulePendingWorkloads(now.Add(5 * time.Minute))
+	if err != nil {
+		t.Fatalf("schedule pending: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 scheduling results, got %d", len(results))
+	}
+
+	gotOrder := []string{results[0].Workload.ID, results[1].Workload.ID, results[2].Workload.ID}
+	wantOrder := []string{"high-older", "high-newer", "low-older"}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Fatalf("unexpected scheduling order: got=%v want=%v", gotOrder, wantOrder)
+		}
+		if results[i].Decision.Outcome != scheduler.OutcomePlaced {
+			t.Fatalf("expected placed decision for %s, got %s", results[i].Workload.ID, results[i].Decision.Outcome)
+		}
+	}
+}
+
+func TestFailNodeFreesAllocationAndRequeuesWorkloads(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, _ = store.CreateNode(domain.Node{
+		ID:                 "node-a",
+		GPUType:            "A100",
+		TotalGPUs:          4,
+		AllocatedGPUs:      4,
+		Health:             domain.NodeHealthHealthy,
+		CapacityClass:      domain.CapacityClassOnDemand,
+		RunningWorkloadIDs: []string{"w-1"},
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	_, _ = store.CreateNode(domain.Node{
+		ID:            "node-b",
+		GPUType:       "A100",
+		TotalGPUs:     4,
+		AllocatedGPUs: 0,
+		Health:        domain.NodeHealthHealthy,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:       "w-1",
+		Type:     domain.WorkloadTypeTraining,
+		GPUType:  "A100",
+		GPUCount: 4,
+		Priority: domain.WorkloadPriorityHigh,
+		State:    domain.WorkloadStateRunning,
+		Placement: &domain.Placement{
+			NodeID: "node-a",
+		},
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+
+	result, err := store.FailNode("node-a", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("fail node: %v", err)
+	}
+	if result.Node.Health != domain.NodeHealthFailed || result.Node.AllocatedGPUs != 0 {
+		t.Fatalf("unexpected failed node state: %+v", result.Node)
+	}
+	if len(result.AffectedWorkloads) != 1 {
+		t.Fatalf("expected one affected workload, got %d", len(result.AffectedWorkloads))
+	}
+	if len(result.Scheduled) != 1 || result.Scheduled[0].Workload.ID != "w-1" {
+		t.Fatalf("expected workload to be rescheduled once, got %+v", result.Scheduled)
+	}
+	if result.Scheduled[0].Workload.State != domain.WorkloadStateRunning || result.Scheduled[0].Workload.Placement == nil || result.Scheduled[0].Workload.Placement.NodeID != "node-b" {
+		t.Fatalf("expected workload running on node-b, got %+v", result.Scheduled[0].Workload)
+	}
+}
+
+func TestFailNodeEvictsWorkloadsByPlacementWhenRunningListIsStale(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, _ = store.CreateNode(domain.Node{
+		ID:            "node-a",
+		GPUType:       "A100",
+		TotalGPUs:     4,
+		AllocatedGPUs: 4,
+		Health:        domain.NodeHealthHealthy,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:       "w-stale",
+		Type:     domain.WorkloadTypeTraining,
+		GPUType:  "A100",
+		GPUCount: 4,
+		Priority: domain.WorkloadPriorityHigh,
+		State:    domain.WorkloadStateRunning,
+		Placement: &domain.Placement{
+			NodeID: "node-a",
+		},
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+
+	result, err := store.FailNode("node-a", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("fail node: %v", err)
+	}
+	if len(result.AffectedWorkloads) != 1 || result.AffectedWorkloads[0].ID != "w-stale" {
+		t.Fatalf("expected stale running workload to be affected, got %+v", result.AffectedWorkloads)
+	}
+	workload, _ := store.GetWorkload("w-stale")
+	if workload.State != domain.WorkloadStatePending || workload.Placement != nil {
+		t.Fatalf("expected workload requeued after node failure, got %+v", workload)
+	}
+}
+
+func TestRecoverNodeSetsHealthyAndSchedulesPending(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, _ = store.CreateNode(domain.Node{
+		ID:            "node-1",
+		GPUType:       "A100",
+		TotalGPUs:     4,
+		AllocatedGPUs: 0,
+		Health:        domain.NodeHealthRecovering,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:          "w-pending",
+		Type:        domain.WorkloadTypeTraining,
+		GPUType:     "A100",
+		GPUCount:    2,
+		Priority:    domain.WorkloadPriorityHigh,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+
+	result, err := store.RecoverNode("node-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("recover node: %v", err)
+	}
+	if result.Node.Health != domain.NodeHealthHealthy {
+		t.Fatalf("expected healthy node after recover, got %+v", result.Node)
+	}
+	if len(result.Scheduled) != 1 || result.Scheduled[0].Workload.ID != "w-pending" {
+		t.Fatalf("expected one scheduled workload after recover, got %+v", result.Scheduled)
+	}
+}
+
+func TestPreemptSpotNodePreemptsRunningWorkloads(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, _ = store.CreateNode(domain.Node{
+		ID:                 "spot-1",
+		GPUType:            "L4",
+		TotalGPUs:          4,
+		AllocatedGPUs:      2,
+		Health:             domain.NodeHealthHealthy,
+		CapacityClass:      domain.CapacityClassSpot,
+		RunningWorkloadIDs: []string{"w-spot"},
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	_, _ = store.CreateWorkload(domain.Workload{
+		ID:       "w-spot",
+		Type:     domain.WorkloadTypeInference,
+		GPUType:  "L4",
+		GPUCount: 2,
+		Priority: domain.WorkloadPriorityNormal,
+		State:    domain.WorkloadStateRunning,
+		Placement: &domain.Placement{
+			NodeID: "spot-1",
+		},
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+
+	result, err := store.PreemptSpotNode("spot-1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("preempt spot node: %v", err)
+	}
+	if result.Node.Health != domain.NodeHealthFailed || result.Node.AllocatedGPUs != 0 {
+		t.Fatalf("unexpected spot node after preemption: %+v", result.Node)
+	}
+	if len(result.AffectedWorkloads) != 1 {
+		t.Fatalf("expected one affected workload, got %d", len(result.AffectedWorkloads))
+	}
+	if result.AffectedWorkloads[0].State != domain.WorkloadStatePending {
+		t.Fatalf("expected pending workload after preemption, got %+v", result.AffectedWorkloads[0])
+	}
+	if result.AffectedWorkloads[0].Placement != nil {
+		t.Fatalf("expected cleared placement, got %+v", result.AffectedWorkloads[0])
+	}
+	if len(result.Scheduled) != 1 {
+		t.Fatalf("expected one scheduling result after preemption, got %+v", result.Scheduled)
 	}
 }
