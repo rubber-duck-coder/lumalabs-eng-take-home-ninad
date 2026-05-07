@@ -26,10 +26,10 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Phase 2 disruptions.
-- Last completed checkpoint: local secret-protection guardrails added and verified.
+- Phase: Phase 3 integration tests.
+- Last completed checkpoint: Phase 2 disruption APIs.
 - Active implementation: none.
-- Next recommended task: commit and push Phase 2 checkpoint, then ask permission before Phase 3.
+- Next recommended task: commit and push Phase 3 checkpoint, then ask permission before Phase 4.
 
 ## Decision Log Index
 
@@ -56,7 +56,7 @@ At every logical checkpoint, update:
 | T012 | 2 | Add node failure endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
 | T013 | 2 | Add spot preemption endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
 | T014 | 2 | Add node recovery endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
-| T015 | 3 | Add API integration tests | test agent | todo | T009-T014 | Real app wiring. |
+| T015 | 3 | Add API integration tests | test agent | done | T009-T014 | Implemented, reviewed, and validated. |
 | T016 | 4 | Add frontend dashboard shell | frontend agent | todo | stable APIs | Single page first. |
 | T017 | 4 | Add workload submission UI | frontend agent | todo | T009,T016 | Enterprise flow. |
 | T018 | 4 | Add admin dashboard sections | frontend agent | todo | T010-T014,T016 | Fleet, utilization, events, disruptions. |
@@ -206,6 +206,42 @@ Blockers:
 
 Resume note:
 - Commit and push Phase 2 disruption checkpoint.
+
+### 004: Phase 3 API Integration Tests
+
+Status: done
+
+Owner: coordinator plus test coding agent
+
+Tasks:
+- Added integration-only API test suite under `integration/`.
+- Added flow coverage for submit/inspect/events and disruption lifecycle.
+- Scoped `make integration` to run integration-tagged package tests only.
+
+Files:
+- `integration/api_integration_test.go`
+- `Makefile`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `make unit`
+- `make integration`
+
+Decisions:
+- Integration suite uses HTTP-level assertions via `httptest.NewServer` with real router/store wiring.
+- Integration tests are tag-gated with `//go:build integration` and isolated from default unit target.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Commit and push this Phase 3 checkpoint.
+
+Review notes:
+- Adversarial review 1 found no blockers; noted minor residual risk around event payload depth.
+- Adversarial review 2 flagged medium gaps in node-state and event-linkage assertions.
+- Added stronger integration assertions for node health/allocation transitions and event attribution counts.
+- Re-ran `make unit` and `make integration`; both pass.
 
 ## Template
 
