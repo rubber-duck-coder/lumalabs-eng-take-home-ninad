@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -eu
+
+blocked_paths='(^|/)(\.env|\.take-home-token)$|(^|/).*(secret|secrets|credentials).*$|(^|/).*service-account.*\.json$|(^|/).*firebase-adminsdk.*\.json$|(^|/).*\.(pem|key|p8|p12|jks)$'
+
+secret_patterns='(sk-[A-Za-z0-9_-]{20,}|OPENAI_API_KEY|ANTHROPIC_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|GOOGLE_APPLICATION_CREDENTIALS|-----BEGIN (RSA|OPENSSH|EC|DSA)? ?PRIVATE KEY-----|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})'
+failed=0
+
+while IFS= read -r -d '' file; do
+  if printf '%s\n' "$file" | grep -Eiq "$blocked_paths"; then
+    echo "pre-commit: refusing likely secret/private file path: $file" >&2
+    failed=1
+    continue
+  fi
+
+  if [ ! -f "$file" ]; then
+    continue
+  fi
+
+  if [ "$file" = "scripts/git-hooks/pre-commit" ]; then
+    continue
+  fi
+
+  if git diff --cached -- "$file" | grep -Eiq "$secret_patterns"; then
+    echo "pre-commit: possible secret detected in staged diff for $file" >&2
+    echo "If this is a false positive, inspect carefully before bypassing." >&2
+    failed=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+exit "$failed"

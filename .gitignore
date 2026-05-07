@@ -1,9 +1,38 @@
+# Local env and secrets
 .env
+.env.*
+!.env.example
 .take-home-token
+*.pem
+*.key
+*.p8
+*.p12
+*.crt
+*.cer
+*.jks
+*secret*
+*secrets*
+*credentials*
+service-account*.json
+firebase-adminsdk*.json
+
+# Build and dependency artifacts
 node_modules/
+dist/
+build/
+coverage/
+tmp/
+*.log
+
+# Python/local tooling
 __pycache__/
 .venv/
+.pytest_cache/
+
+# OS/editor noise
 .DS_Store
+.idea/
+.vscode/
 
 # gcloud SDK installs (in case anyone unpacks it inside the repo)
 .gcloud/

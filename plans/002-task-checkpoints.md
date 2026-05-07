@@ -27,7 +27,7 @@ At every logical checkpoint, update:
 ## Current State
 
 - Phase: Phase 1 backend MVP.
-- Last completed checkpoint: Phase 0 skeleton and Phase 1 core API verified with unit tests.
+- Last completed checkpoint: local secret-protection guardrails added and verified.
 - Active implementation: none.
 - Next recommended task: pre-commit adversarial review, initial git commit, then Phase 2 disruptions.
 
@@ -133,6 +133,39 @@ Review notes:
 - Fixed with `MemoryStore.ScheduleWorkload`, which runs scheduler decision and workload/node mutation under one lock.
 - Added tests for atomic scheduling and concurrent API submissions.
 - Also fixed timestamp-only ID collision by adding per-process atomic sequence suffix.
+
+### 002: Local Secret Protection
+
+Status: done
+
+Owner: coordinator
+
+Tasks:
+- Expanded `.gitignore` for local env, credentials, keys, logs, and build artifacts.
+- Added local pre-commit hook to block obvious secret paths and staged secret-looking diffs.
+- Added hook installer script.
+- Removed tracked `excalidraw.log` from git while keeping local ignored log behavior.
+
+Files:
+- `.gitignore`
+- `scripts/git-hooks/pre-commit`
+- `scripts/install-git-hooks.sh`
+- `excalidraw.log` removed from git tracking
+
+Tests run:
+- `make unit`
+- Installed local hook with `sh scripts/install-git-hooks.sh`
+- Verified hook blocks staged fake API-key content
+- Verified `.env`, `.take-home-token`, and `excalidraw.log` are ignored
+
+Review notes:
+- Two adversarial agents reviewed the secret-protection changes.
+- We accepted local-only protection as sufficient for this private solo repo.
+- Fixed the high-value hook issue: staged file iteration is now null-delimited and whitespace-safe.
+- Deferred CI/server-side secret scanning by user decision.
+
+Resume note:
+- Commit and push this guardrail checkpoint before Phase 2.
 
 ## Template
 
