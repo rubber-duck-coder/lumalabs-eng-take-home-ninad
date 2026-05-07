@@ -1,0 +1,202 @@
+# Execution Plan
+
+## Goal
+
+Ship the smallest working GPU control plane first, then iterate in tested layers until local, deployed, and E2E flows are complete.
+
+## Operating Principles
+
+- Always keep `main` runnable.
+- Build MVP first; add complexity only after verification.
+- Prefer parallel workstreams with clear file ownership.
+- Use unit tests for every core behavior before integration/E2E.
+- Use smaller/faster coding agents for bounded implementation tasks.
+- Keep coordinator/planner on the strongest available model for cross-workstream context.
+- Record major tradeoff decisions in the relevant RFC `Decision Log`.
+
+## MVP Definition
+
+MVP is complete when:
+
+- One Go backend process starts locally.
+- Seeded fleet is available through API.
+- Workload can be submitted.
+- Scheduler places or queues workload with explanation.
+- Admin can view fleet, workloads, utilization, and events through API.
+- Unit tests cover scheduler resource fit, priority, queueing, and spot tolerance.
+- `make unit` and `make verify` exist.
+
+No frontend or deployment is required for MVP.
+
+## Phase 0: Repo Skeleton
+
+Owner: coordinator or small coding agent.
+
+Deliver:
+- Go module layout.
+- `Makefile`.
+- Basic app entrypoint.
+- Health endpoint.
+- Test command wiring.
+
+Acceptance:
+- `make unit` passes.
+- Local app starts.
+- `GET /health` works.
+
+Parallelism:
+- Low; establish shared structure first.
+
+## Phase 1: Backend Core MVP
+
+Owner: backend coding agents with disjoint modules.
+
+Parallel tasks:
+- Domain models: workloads, nodes, events.
+- Scheduler package: placement and queueing logic.
+- In-memory repositories and seed data.
+- Gateway/API handlers for health, fleet, workloads.
+- Unit tests for scheduler behavior.
+
+Acceptance:
+- Submit workload through API.
+- Workload becomes `running` or `pending`.
+- Response includes placement or queue reason.
+- Scheduler tests pass.
+
+Coordination rule:
+- Scheduler owns policy only.
+- API handlers do not duplicate scheduling logic.
+
+## Phase 2: Admin And Disruptions
+
+Owner: backend coding agents.
+
+Parallel tasks:
+- Fleet summary and utilization API.
+- Event log API.
+- Node failure endpoint.
+- Spot preemption endpoint.
+- Node recovery endpoint.
+- Disruption unit/API tests.
+
+Acceptance:
+- Admin can trigger disruption.
+- Affected workloads are rescheduled, queued, preempted, or failed.
+- Events explain what happened.
+
+## Phase 3: Integration Tests
+
+Owner: test-focused coding agent.
+
+Deliver:
+- API integration tests using real app wiring.
+- Deterministic seed/reset path.
+- Submit -> schedule -> inspect flow.
+- Disruption -> reschedule/queue flow.
+
+Acceptance:
+- `make integration` passes locally.
+- Tests do not require external services.
+
+## Phase 4: Minimal Frontend
+
+Owner: frontend coding agents.
+
+Parallel tasks:
+- Single-page dashboard shell.
+- Workload submission form.
+- Workload/fleet/event tables.
+- Utilization summary.
+- Disruption controls.
+- Frontend unit/component tests.
+
+Acceptance:
+- Reviewer can complete demo flow from UI.
+- UI displays backend explanations.
+- `make verify` includes frontend checks.
+
+## Phase 5: Local Infra
+
+Owner: infra coding agent.
+
+Deliver:
+- Dockerfile.
+- `docker-compose.yml`.
+- `.env.example` updates.
+- Local run docs.
+- Health polling helper if needed.
+
+Acceptance:
+- Fresh checkout can run with `docker compose up --build`.
+- API and UI available at one local URL.
+
+## Phase 6: E2E
+
+Owner: test/infra coding agent.
+
+Deliver:
+- E2E test suite parameterized by `BASE_URL`.
+- Local E2E target.
+- Seed/reset support for stable tests.
+
+Acceptance:
+- `BASE_URL=http://localhost:8080 make e2e` passes.
+- E2E covers submit, placement/queueing, disruption, events, and utilization.
+
+## Phase 7: Deployment
+
+Owner: infra coding agent with coordinator review.
+
+Deliver:
+- Render deployment config/docs.
+- Deployed health check.
+- Deployed app URL.
+- Production env notes.
+
+Acceptance:
+- App deploys within budget.
+- `BASE_URL=<deployed-url> make e2e` passes.
+- Cold-start behavior documented if using free tier.
+
+## Phase 8: Submission Polish
+
+Owner: coordinator.
+
+Deliver:
+- `APPROACH.md`.
+- README setup/test/deploy updates.
+- `video.md` link placeholder or final link.
+- Final verification run.
+
+Acceptance:
+- Reviewer has local run path, deployed URL, test commands, and architecture/tradeoff explanation.
+
+## Agent Strategy
+
+- Coordinator: owns architecture consistency, RFC decision logs, integration review, and final submission quality.
+- Backend agents: implement isolated packages and tests.
+- Frontend agents: implement UI sections after API contracts stabilize.
+- Infra agents: implement Docker/deploy/test command wiring.
+- Test agents: add integration and E2E tests without changing core policy.
+
+Use smaller/faster agents for bounded tasks with clear ownership. Use strongest available model for planning, cross-cutting design, debugging complex integration failures, and final review.
+
+## Parallelization Rules
+
+- Do not parallelize before repo skeleton exists.
+- Assign disjoint file/module ownership.
+- Stabilize API contracts before frontend expands.
+- Keep scheduler policy changes centralized.
+- Avoid two agents editing the same file unless coordinator integrates sequentially.
+- Every agent must leave tests passing for its scope.
+
+## Stop Conditions
+
+Pause for alignment if:
+
+- A decision changes architecture boundaries.
+- Budget or deployment assumptions change.
+- A task requires adding external paid services.
+- Tests require nondeterministic timing/background behavior.
+- The implementation drifts from the RFC decision logs.
