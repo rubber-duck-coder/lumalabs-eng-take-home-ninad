@@ -402,40 +402,6 @@ export function App() {
 
   return (
     <main className="page">
-      <header className="hero">
-        <div className="hero__eyebrow">Phase 4 admin dashboard</div>
-        <div className="hero__top">
-          <div>
-            <h1>Luma GPU Workload Console</h1>
-            <p>
-              A page-like control plane UI for workload submission, fleet monitoring, and admin
-              operations.
-            </p>
-          </div>
-          <div className="hero__actions">
-            <button
-              className="button button--secondary"
-              onClick={() => refreshAll().catch((err) => setError(formatError(err)))}
-              disabled={loading}
-            >
-              {loading ? "Refreshing..." : "Refresh all"}
-            </button>
-            <button className="button button--secondary" onClick={handleTick} disabled={tickLoading}>
-              {tickLoading ? "Ticking..." : "Run scheduler tick"}
-            </button>
-          </div>
-        </div>
-
-        <div className="hero__meta">
-          <span className="meta-pill">Workloads: {workloads.length}</span>
-          <span className="meta-pill">Active: {activeWorkloads.length}</span>
-          <span className="meta-pill">Nodes: {nodes.length}</span>
-          <span className="meta-pill meta-pill--success">Healthy: {healthyNodes.length}</span>
-          <span className="meta-pill meta-pill--warning">Recovering: {recoveringNodes.length}</span>
-          <span className="meta-pill meta-pill--danger">Failed: {failedNodes.length}</span>
-        </div>
-      </header>
-
       {statusMessage && <div className="banner banner--success">{statusMessage}</div>}
       {error && <div className="banner banner--error">{error}</div>}
 
@@ -445,6 +411,19 @@ export function App() {
             <span className="sidebar__eyebrow">Overview</span>
             <h2>Live fleet navigation</h2>
             <p>Choose a page to switch between user, dashboard, and operations views.</p>
+            <div className="sidebar__actions">
+              <button
+                className="button button--secondary"
+                onClick={() => refreshAll().catch((err) => setError(formatError(err)))}
+                disabled={loading}
+                type="button"
+              >
+                {loading ? "Refreshing..." : "Refresh all"}
+              </button>
+              <button className="button button--secondary" onClick={handleTick} disabled={tickLoading} type="button">
+                {tickLoading ? "Ticking..." : "Run scheduler tick"}
+              </button>
+            </div>
           </div>
 
           <nav className="sidebar__nav" aria-label="Primary navigation">
@@ -497,6 +476,14 @@ export function App() {
                 <strong>{workloadSummary.running}</strong>
                 <span>Running</span>
               </div>
+            </div>
+            <div className="sidebar__totals">
+              <span className="meta-pill">Workloads: {workloads.length}</span>
+              <span className="meta-pill">Active: {activeWorkloads.length}</span>
+              <span className="meta-pill">Nodes: {nodes.length}</span>
+              <span className="meta-pill meta-pill--success">Healthy: {healthyNodes.length}</span>
+              <span className="meta-pill meta-pill--warning">Recovering: {recoveringNodes.length}</span>
+              <span className="meta-pill meta-pill--danger">Failed: {failedNodes.length}</span>
             </div>
           </div>
         </aside>
