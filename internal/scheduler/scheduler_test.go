@@ -25,6 +25,27 @@ func TestWorkloadOrderingHelper(t *testing.T) {
 	}
 }
 
+func TestWorkloadOrderingPrefersInferenceThenNonSpotWithinPriority(t *testing.T) {
+	base := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+	workloads := []Workload{
+		{ID: "batch-spot", Type: WorkloadTypeBatch, Priority: PriorityNormal, SubmittedAt: base, SpotTolerant: true},
+		{ID: "batch-ondemand", Type: WorkloadTypeBatch, Priority: PriorityNormal, SubmittedAt: base.Add(time.Minute)},
+		{ID: "training", Type: WorkloadTypeTraining, Priority: PriorityNormal, SubmittedAt: base.Add(2 * time.Minute)},
+		{ID: "inference-spot", Type: WorkloadTypeInference, Priority: PriorityNormal, SubmittedAt: base.Add(3 * time.Minute), SpotTolerant: true},
+		{ID: "inference-ondemand", Type: WorkloadTypeInference, Priority: PriorityNormal, SubmittedAt: base.Add(4 * time.Minute)},
+	}
+
+	OrderPendingWorkloads(workloads)
+
+	got := []string{workloads[0].ID, workloads[1].ID, workloads[2].ID, workloads[3].ID, workloads[4].ID}
+	want := []string{"inference-ondemand", "inference-spot", "training", "batch-ondemand", "batch-spot"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected class-aware order: got %v want %v", got, want)
+		}
+	}
+}
+
 func TestResourceFitQueuesWhenNoEligibleNodes(t *testing.T) {
 	workload := Workload{
 		ID:           "wl-1",

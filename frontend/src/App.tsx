@@ -840,8 +840,8 @@ export function App() {
             )}
 
             {activeView === "admin-ops" && (
-              <div className="dashboard-grid">
-                <section className="panel panel--span-6">
+              <div className="dashboard-grid dashboard-grid--ops">
+                <section className="panel panel--span-5">
                   <div className="panel__header">
                     <div>
                       <h3>Operational shortcuts</h3>
@@ -849,33 +849,54 @@ export function App() {
                     </div>
                   </div>
 
-                  <div className="action-grid action-grid--stacked">
-                    <button
-                      className="button button--secondary"
-                      onClick={() => handleDemoAction("seed")}
-                      disabled={demoAction !== null || loading}
-                    >
-                      {demoAction === "seed" ? "Seeding..." : "Seed demo data"}
-                    </button>
-                    <button
-                      className="button button--secondary"
-                      onClick={() => handleDemoAction("clear")}
-                      disabled={demoAction !== null || loading}
-                    >
-                      {demoAction === "clear" ? "Clearing..." : "Clear data"}
-                    </button>
-                    <button className="button button--secondary" onClick={handleTick} disabled={tickLoading}>
-                      {tickLoading ? "Ticking..." : "Run scheduler tick"}
-                    </button>
+                  <div className="ops-stack">
+                    <div className="ops-card">
+                      <div className="ops-card__copy">
+                        <strong>Seed demo data</strong>
+                        <span>Restore the deterministic fleet, workload, and event set.</span>
+                      </div>
+                      <button
+                        className="button button--secondary"
+                        onClick={() => handleDemoAction("seed")}
+                        disabled={demoAction !== null || loading}
+                        type="button"
+                      >
+                        {demoAction === "seed" ? "Seeding..." : "Seed demo data"}
+                      </button>
+                    </div>
+
+                    <div className="ops-card">
+                      <div className="ops-card__copy">
+                        <strong>Clear data</strong>
+                        <span>Wipe the current demo state and start from a clean slate.</span>
+                      </div>
+                      <button
+                        className="button button--secondary"
+                        onClick={() => handleDemoAction("clear")}
+                        disabled={demoAction !== null || loading}
+                        type="button"
+                      >
+                        {demoAction === "clear" ? "Clearing..." : "Clear data"}
+                      </button>
+                    </div>
+
+                    <div className="ops-card">
+                      <div className="ops-card__copy">
+                        <strong>Scheduler tick</strong>
+                        <span>Advance pending placements and observe the scheduling decisions.</span>
+                      </div>
+                      <button className="button button--secondary" onClick={handleTick} disabled={tickLoading} type="button">
+                        {tickLoading ? "Ticking..." : "Run scheduler tick"}
+                      </button>
+                    </div>
                   </div>
 
                   <p className="muted">
-                    Use seed and clear to reset the demo fleet, then run the scheduler tick to observe
-                    placement decisions.
+                    Use these controls to cycle the demo environment and observe how the scheduler responds.
                   </p>
                 </section>
 
-                <section className="panel panel--span-6">
+                <section className="panel panel--span-7">
                   <div className="panel__header">
                     <div>
                       <h3>Node disruption controls</h3>

@@ -481,6 +481,14 @@ button:focus-visible {
   gap: 14px;
 }
 
+.dashboard-grid--ops {
+  align-items: start;
+}
+
+.dashboard-grid--ops .panel {
+  min-height: 100%;
+}
+
 .panel {
   padding: 18px;
   border: 1px solid rgba(148, 163, 184, 0.16);
@@ -862,6 +870,40 @@ th {
   grid-template-columns: 1fr;
 }
 
+.ops-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.ops-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.74);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.ops-card__copy {
+  display: grid;
+  gap: 6px;
+}
+
+.ops-card__copy strong {
+  font-size: 14px;
+}
+
+.ops-card__copy span {
+  color: rgba(148, 163, 184, 0.94);
+  font-size: 13px;
+}
+
+.ops-card .button {
+  min-width: 140px;
+}
+
 .event-list {
   display: grid;
   gap: 10px;
@@ -927,7 +969,10 @@ th {
   }
 
   .panel--span-7,
-  .panel--span-5 {
+  .panel--span-5,
+  .panel--span-4,
+  .panel--span-6,
+  .panel--span-8 {
     grid-column: span 12;
   }
 }
@@ -978,6 +1023,16 @@ th {
 
   .action-grid {
     gap: 8px;
+  }
+
+  .ops-card {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .ops-card .button {
+    width: 100%;
+    min-width: 0;
   }
 
   .node-pill {

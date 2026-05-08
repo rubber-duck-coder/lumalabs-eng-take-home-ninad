@@ -93,6 +93,12 @@ func WorkloadLess(a, b Workload) bool {
 	if a.Priority != b.Priority {
 		return a.Priority > b.Priority
 	}
+	if workloadClassRank(a.Type) != workloadClassRank(b.Type) {
+		return workloadClassRank(a.Type) > workloadClassRank(b.Type)
+	}
+	if a.SpotTolerant != b.SpotTolerant {
+		return !a.SpotTolerant && b.SpotTolerant
+	}
 	if !a.SubmittedAt.Equal(b.SubmittedAt) {
 		return a.SubmittedAt.Before(b.SubmittedAt)
 	}
@@ -298,5 +304,18 @@ func queueReason(workload Workload, rejected []RejectedNode) string {
 		return fmt.Sprintf("no healthy on-demand %s node with %d free gpus; rejected: %s", workload.GPUType, workload.GPUCount, strings.Join(parts, " | "))
 	default:
 		return fmt.Sprintf("no eligible nodes for workload %s; rejected: %s", workload.ID, strings.Join(parts, " | "))
+	}
+}
+
+func workloadClassRank(workloadType WorkloadType) int {
+	switch workloadType {
+	case WorkloadTypeInference:
+		return 3
+	case WorkloadTypeTraining:
+		return 2
+	case WorkloadTypeBatch:
+		return 1
+	default:
+		return 0
 	}
 }

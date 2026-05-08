@@ -29,7 +29,7 @@ At every logical checkpoint, update:
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
 - Active implementation: control-plane module split complete enough for the next behavior work, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
-- Next recommended task: implement demand-shift rebalance policy and keep refining the control-plane boundaries around the already-implemented replica-aware inference and preemption flows.
+- Next recommended task: complete demand-shift rebalance policy and keep refining the control-plane boundaries around the already-implemented replica-aware inference and preemption flows.
 
 ## Decision Log Index
 
@@ -70,7 +70,7 @@ At every logical checkpoint, update:
 | T026 | 6 | Add inference scale-out model | backend + frontend | done | T009-T025 | Model replica-aware inference workloads and show horizontal scaling intent in the UI/API. Current slice adds replica-aware inference placement and a user-facing replicas control. |
 | T027 | 6 | Add priority preemption policy | backend | done | T006-T025 | Reclaim capacity for higher-priority work before queueing. Current slice preempts lower-priority running workloads when a higher-priority fit exists. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | done | T012-T025 | Simulate or ingest node health changes without manual admin clicks. Current slice adds a background reconciler loop. |
-| T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
+| T029 | 6 | Add demand-shift rebalance policy | backend | doing | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. Current slice makes pending ordering class-aware within each priority tier. |
 | T030 | 6 | Modularize control plane responsibilities | coordinator + backend | done | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 | T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |

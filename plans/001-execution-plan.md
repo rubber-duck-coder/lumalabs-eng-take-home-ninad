@@ -193,6 +193,7 @@ Current implementation:
 - Batch prefers spot when tolerated and otherwise packs tightly on on-demand nodes.
 - Inference workloads now support replica-aware scale-out placement across distinct eligible nodes.
 - Priority preemption is now active in the store layer for higher-priority workloads when a fit exists only after eviction of lower-priority work.
+- Pending workload ordering is now class-aware within the same priority tier, favoring inference over training over batch and non-spot work before spot-tolerant work.
 
 ## Phase 6: Control-Plane Modularization
 
