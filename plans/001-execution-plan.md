@@ -235,6 +235,13 @@ Current progress:
 Next slice:
 - Add a dedicated architecture page in the UI to describe request flow, scheduling decisions, reconciliation, and persistence boundaries.
 
+Completed slice:
+- Architecture page is now an interactive SVG-backed design surface with:
+  - layered control-plane diagram,
+  - API-flow-driven sequence diagram,
+  - limitations and adversarial-gap tab,
+  - decision-logic tab with explicit scoring priorities.
+
 Acceptance:
 - New behaviors can land without adding more policy to the gateway or persistence layer.
 - Scheduler remains a pure decision engine.

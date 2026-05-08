@@ -26,10 +26,10 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Deployment readiness for a Google Cloud VM.
-- Last completed checkpoint: Phase 6 E2E coverage and stronger rebalance policy.
-- Active implementation: core behavior work is complete enough for deployment prep, including E2E coverage, replica-aware inference, checkpoint semantics, conservative rebalance, telemetry history, and dashboard UX cleanup.
-- Next recommended task: finalize deployment polish and live VM verification with `BASE_URL=<deployed-url> make e2e`.
+- Phase: Submission wrap-up readiness.
+- Last completed checkpoint: Interactive system-design UX with SVG architecture and decision-logic docs.
+- Active implementation: core behavior and UX are complete enough for submission prep, including E2E coverage, telemetry history, interactive architecture diagrams, limitations analysis, and decision/scoring documentation.
+- Next recommended task: finalize submission assets (`APPROACH.md`, README polish, demo/video notes) and re-run cloud E2E against deployed URL.
 
 ## Decision Log Index
 
@@ -79,6 +79,8 @@ At every logical checkpoint, update:
 | T035 | 6 | Add control-plane telemetry history API | backend | done | T028-T030 | Capture snapshots from control-plane mutations and expose utilization, node health, and GPU availability history via `GET /telemetry`. |
 | T036 | 4 | Add telemetry timeseries dashboard | frontend | done | T035 | Utilization, GPU capacity, node health, and workload state telemetry charts are rendered from `GET /telemetry`. |
 | T037 | 7 | Add system design overview page | frontend + coordinator | done | T033,T035 | Added left-nav architecture entry and a pure HTML system design page covering request flow, scheduling, reconciliation, events, telemetry, and persistence. |
+| T038 | 7 | Upgrade architecture to interactive SVG diagrams | frontend + coordinator | done | T037 | Replaced verbose blocks with interactive layered SVG architecture and API sequence visuals. |
+| T039 | 7 | Add adversarial limitations + decision-logic tabs | coordinator + frontend | done | T038 | Added collapsible limitations/findings and explicit scoring/decision policy documentation (`inference > training > batch`, `on-demand > spot`). |
 
 ## Checkpoint Entries
 

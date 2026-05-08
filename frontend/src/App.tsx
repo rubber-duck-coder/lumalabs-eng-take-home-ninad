@@ -87,6 +87,8 @@ type SimulationScenario = "sudden-inference-spike" | "spot-preemption" | "node-f
 type ViewKey = "user-view" | "admin-dashboard" | "admin-ops" | "system-design";
 type UserTabKey = "submit" | "monitoring";
 type DashboardTabKey = "summary" | "events";
+type DesignTabKey = "high-level" | "api-sequences" | "limitations" | "decisions";
+type DesignFlowKey = "submit" | "tick" | "disruption" | "simulation" | "read";
 
 type DisruptionResult = {
   node?: Node;
@@ -378,6 +380,8 @@ export function App() {
   const [activeView, setActiveView] = useState<ViewKey>("user-view");
   const [userTab, setUserTab] = useState<UserTabKey>("submit");
   const [dashboardTab, setDashboardTab] = useState<DashboardTabKey>("summary");
+  const [designTab, setDesignTab] = useState<DesignTabKey>("high-level");
+  const [designFlow, setDesignFlow] = useState<DesignFlowKey>("submit");
   const telemetryUtilizationSeries = useMemo(
     () => telemetry.map((snapshot) => snapshot.utilization_percent),
     [telemetry]
@@ -731,6 +735,224 @@ export function App() {
   const dashboardTabs: Array<{ id: DashboardTabKey; label: string }> = [
     { id: "summary", label: "Fleet summary" },
     { id: "events", label: "Event log" }
+  ];
+  const designTabs: Array<{ id: DesignTabKey; label: string }> = [
+    { id: "high-level", label: "High-level design" },
+    { id: "api-sequences", label: "API sequences" },
+    { id: "limitations", label: "Limitations" },
+    { id: "decisions", label: "Decision logic" }
+  ];
+  const designFlows: Array<{ id: DesignFlowKey; label: string; api: string; tone: "success" | "warning" | "danger" | "neutral" }> = [
+    { id: "submit", label: "Workload submit", api: "POST /workloads", tone: "success" },
+    { id: "tick", label: "Scheduler tick", api: "POST /scheduler/tick", tone: "warning" },
+    { id: "disruption", label: "Node disruption", api: "POST /admin/nodes/:id/{fail|recover|preempt-spot}", tone: "danger" },
+    { id: "simulation", label: "Scenario simulation", api: "POST /admin/simulations/:scenario", tone: "neutral" },
+    { id: "read", label: "Read models", api: "GET /fleet/summary | /events | /telemetry", tone: "neutral" }
+  ];
+  const selectedDesignFlow = designFlows.find((flow) => flow.id === designFlow) ?? designFlows[0];
+  const sequenceParticipants = ["Client/Admin", "Gateway", "Control Plane", "Policy Engine", "Store (Postgres)"];
+  const sequenceByFlow: Record<DesignFlowKey, Array<{ from: string; to: string; action: string }>> = {
+    submit: [
+      { from: "Client/Admin", to: "Gateway", action: "POST /workloads" },
+      { from: "Gateway", to: "Control Plane", action: "validate + normalize request" },
+      { from: "Control Plane", to: "Policy Engine", action: "placement decision + preemption check" },
+      { from: "Policy Engine", to: "Store (Postgres)", action: "atomic write: workload + allocation" },
+      { from: "Control Plane", to: "Store (Postgres)", action: "emit event + telemetry snapshot" }
+    ],
+    tick: [
+      { from: "Client/Admin", to: "Gateway", action: "POST /scheduler/tick" },
+      { from: "Gateway", to: "Control Plane", action: "load pending queue" },
+      { from: "Control Plane", to: "Policy Engine", action: "priority + class-aware ordering" },
+      { from: "Policy Engine", to: "Store (Postgres)", action: "atomic placements for runnable workloads" },
+      { from: "Control Plane", to: "Store (Postgres)", action: "persist scheduling events + telemetry" }
+    ],
+    disruption: [
+      { from: "Client/Admin", to: "Gateway", action: "POST /admin/nodes/:id/*" },
+      { from: "Gateway", to: "Control Plane", action: "validate disruption intent" },
+      { from: "Control Plane", to: "Policy Engine", action: "evict/reschedule/queue policy" },
+      { from: "Policy Engine", to: "Store (Postgres)", action: "atomic node + workload state transitions" },
+      { from: "Control Plane", to: "Store (Postgres)", action: "persist disruption events + telemetry" }
+    ],
+    simulation: [
+      { from: "Client/Admin", to: "Gateway", action: "POST /admin/simulations/:scenario" },
+      { from: "Gateway", to: "Control Plane", action: "trigger composed control-plane actions" },
+      { from: "Control Plane", to: "Policy Engine", action: "apply scenario-specific scheduling/disruption policy" },
+      { from: "Policy Engine", to: "Store (Postgres)", action: "persist scenario state transitions" },
+      { from: "Control Plane", to: "Store (Postgres)", action: "persist simulation_started/completed + telemetry trail" }
+    ],
+    read: [
+      { from: "Client/Admin", to: "Gateway", action: "GET summary/events/telemetry" },
+      { from: "Gateway", to: "Store (Postgres)", action: "query read models" },
+      { from: "Store (Postgres)", to: "Gateway", action: "return summary + event log + timeseries" },
+      { from: "Gateway", to: "Client/Admin", action: "render operational state" }
+    ]
+  };
+  const limitationSections: Array<{
+    id: string;
+    title: string;
+    note: string;
+    refs?: string;
+    future: string;
+  }> = [
+    {
+      id: "scalability",
+      title: "Scalability bottlenecks",
+      note:
+        "State writes currently favor snapshot-style full rewrites in Postgres paths and unpaginated list reads, which can amplify write/read cost as node/workload/event volume grows.",
+      refs: "internal/store/postgres.go, internal/gateway/router.go",
+      future:
+        "Move to row-level CRUD + append-only event writes, and introduce pagination/filtering with bounded event windows."
+    },
+    {
+      id: "availability",
+      title: "Availability and multi-region resilience",
+      note:
+        "Control plane and persistence remain single-failure-domain oriented; multi-replica control plane would currently duplicate background loops without leader election.",
+      refs: "cmd/control-plane/main.go, internal/store/config.go",
+      future:
+        "Adopt leader-elected workers plus multi-AZ/multi-region durable datastore and explicit failover semantics."
+    },
+    {
+      id: "reconcile-overhead",
+      title: "Scheduling and reconciliation overhead",
+      note:
+        "Reconcile and tick flows do repeated broad scans and coupled policy+mutation paths, which raises overhead and tuning complexity under high churn.",
+      refs: "internal/controlplane/service.go, internal/store/memory.go",
+      future:
+        "Shift to event-driven incremental reconcile and keep scheduling policy output declarative before mutation application."
+    },
+    {
+      id: "consistency",
+      title: "Consistency and integrity risks",
+      note:
+        "Concurrent writers can still race without entity-level optimistic versions, and event recording is best-effort in places, weakening strict audit guarantees.",
+      refs: "internal/store/postgres.go, internal/events/recorder.go",
+      future:
+        "Add CAS/versioned writes, idempotency keys, and an outbox pattern to atomically couple state transition + audit/event emission."
+    },
+    {
+      id: "observability",
+      title: "Observability and explainability gaps",
+      note:
+        "Telemetry/event visibility is useful but not yet rich enough for deep root-cause analysis at scale (for example structured decision trace and correlation IDs).",
+      refs: "internal/telemetry/telemetry.go, internal/domain/event.go",
+      future:
+        "Add structured reason codes, correlation IDs, policy-score traces, and OpenTelemetry spans/metrics for schedule and reconcile paths."
+    },
+    {
+      id: "security",
+      title: "Security and tenancy",
+      note:
+        "Mutating APIs are currently open within network reach and designed for demo use, without full authn/authz, tenant boundaries, or admin/user separation.",
+      refs: "internal/gateway/router.go",
+      future:
+        "Introduce identity-aware gateway middleware, RBAC, tenant-scoped resources, and policy/rate limits per actor and endpoint."
+    },
+    {
+      id: "ops",
+      title: "Operational risk",
+      note:
+        "Operational safety still depends on environment discipline; demo endpoints and in-memory fallback paths can become footguns in misconfigured environments.",
+      refs: "internal/store/config.go, internal/gateway/router.go",
+      future:
+        "Fail closed for non-dev misconfigurations, hard-gate demo endpoints, and add safer automated deploy/runbook controls."
+    },
+    {
+      id: "testing",
+      title: "Testing and failure-mode coverage",
+      note:
+        "Coverage is solid for functional behavior but still light on high-risk production modes: Postgres concurrency/fault injection, graceful shutdown, and large-scale load/chaos.",
+      refs: "internal/store/postgres_test.go, cmd/control-plane/main.go",
+      future:
+        "Add load/chaos suites with SLO assertions, multi-node fault injection, and deterministic replay tests for scheduler/reconciler decisions."
+    }
+  ];
+  const decisionSections: Array<{
+    id: string;
+    title: string;
+    detail: string;
+    implementation: string;
+  }> = [
+    {
+      id: "fit-first",
+      title: "1) Feasibility first: hard-constraint filtering",
+      detail:
+        "Every placement starts with hard filters: GPU type and count, node health, and capacity-class compatibility. Nodes that violate any constraint are rejected before scoring.",
+      implementation:
+        "This prevents invalid placements and keeps explanations actionable by preserving explicit rejection reasons per candidate node."
+    },
+    {
+      id: "class-aware",
+      title: "2) Workload-class aware scheduling strategy",
+      detail:
+        "Training prefers stable on-demand capacity, inference prefers low-contention placement and spread, and batch prefers lower-cost spot when tolerated.",
+      implementation:
+        "Class-aware ordering and scoring keep latency-sensitive work responsive while preserving throughput/cost efficiency for flexible jobs."
+    },
+    {
+      id: "binpack-vs-spread",
+      title: "3) Bin packing vs spread: policy tradeoff",
+      detail:
+        "The system uses mixed strategy: tighter packing for training/batch to reduce fragmentation, and more spread for inference replicas to reduce correlated failure risk.",
+      implementation:
+        "Inference replica placement is node-distinct where possible; non-inference placement stays closer to bin-pack behavior under constraints."
+    },
+    {
+      id: "preemption",
+      title: "4) Preemption decision policy",
+      detail:
+        "Preemption is used when higher-priority work cannot be placed directly and lower-priority running workloads can be reclaimed to create a valid fit.",
+      implementation:
+        "Only policy-compatible victims are considered; affected workloads transition with explicit reasons/events, and resumable metadata is used when present."
+    },
+    {
+      id: "queue-order",
+      title: "5) Queue ordering and fairness",
+      detail:
+        "Pending workloads are revisited in deterministic policy order: priority first, then class-aware ordering within tier, with safeguards against uncontrolled churn.",
+      implementation:
+        "Deterministic ordering improves debuggability and repeatability for simulations and operator analysis."
+    },
+    {
+      id: "reconcile",
+      title: "6) Reconciliation loop behavior",
+      detail:
+        "Reconciliation reacts to fleet health shifts and pending backlog by re-running scheduling opportunities and recovery paths.",
+      implementation:
+        "The current approach emphasizes correctness and explainability over raw scale; event-driven/incremental reconcile is the next scaling step."
+    },
+    {
+      id: "explainability",
+      title: "7) Why a workload is queued or placed",
+      detail:
+        "For each decision, the system surfaces placement or queue explanations based on failed constraints and selected-node rationale.",
+      implementation:
+        "This is reflected in workload status reasons and event log metadata so admins can understand what happened, how, and why."
+    },
+    {
+      id: "safety",
+      title: "8) Safety over aggressiveness",
+      detail:
+        "The policy intentionally avoids hyper-aggressive rebalance to reduce unnecessary workload movement and operational instability.",
+      implementation:
+        "Anti-churn bias keeps behavior stable unless policy value is clear (priority pressure, disruption recovery, or explicit scheduling trigger)."
+    }
+  ];
+  const supportedAPIs = [
+    "GET /health",
+    "GET /nodes",
+    "GET /fleet/summary",
+    "GET /events",
+    "GET /telemetry?limit=n",
+    "GET /workloads",
+    "POST /workloads",
+    "POST /scheduler/tick",
+    "POST /admin/nodes/:id/fail",
+    "POST /admin/nodes/:id/recover",
+    "POST /admin/nodes/:id/preempt-spot",
+    "POST /admin/demo/seed",
+    "POST /admin/demo/clear",
+    "POST /admin/simulations/:scenario"
   ];
 
   return (
@@ -1369,59 +1591,223 @@ export function App() {
             )}
 
             {activeView === "system-design" && (
-              <section className="panel system-design">
-                <div className="panel__header">
-                  <h3>System design overview</h3>
+              <div className="tab-view">
+                <div className="tab-bar" role="tablist" aria-label="System design tabs">
+                  {designTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`tab-pill ${designTab === tab.id ? "tab-pill--active" : ""}`}
+                      onClick={() => setDesignTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
                 </div>
 
-                <div className="system-design__grid">
-                  <article className="system-design__card">
-                    <h4>Core modules</h4>
-                    <ul>
-                      <li><strong>Gateway</strong>: validates requests and exposes REST APIs.</li>
-                      <li><strong>Control plane services</strong>: orchestrates submit, disruption, simulation, and query flows.</li>
-                      <li><strong>Scheduler</strong>: computes fit, class-aware ordering, and preemption decisions.</li>
-                      <li><strong>Reconciler</strong>: drives health transitions and retries pending scheduling.</li>
-                      <li><strong>Event recorder</strong>: emits explainable audit events for every major transition.</li>
-                      <li><strong>Telemetry history</strong>: captures snapshots for utilization, node health, and workload state trends.</li>
-                      <li><strong>Store</strong>: persists nodes, workloads, events, and telemetry in Postgres.</li>
-                    </ul>
-                  </article>
+                {designTab === "high-level" && (
+                  <section className="panel system-design">
+                    <div className="panel__header">
+                      <h3>Layered control plane</h3>
+                    </div>
+                    <div className="diagram-toolbar">
+                      {designFlows.map((flow) => (
+                        <button
+                          key={flow.id}
+                          type="button"
+                          className={`chip chip--${flow.tone} design-chip ${designFlow === flow.id ? "design-chip--active" : ""}`}
+                          onClick={() => setDesignFlow(flow.id)}
+                        >
+                          {flow.label}
+                        </button>
+                      ))}
+                    </div>
 
-                  <article className="system-design__card">
-                    <h4>Request flow</h4>
-                    <ol>
-                      <li>User or admin calls API through the gateway.</li>
-                      <li>Control plane validates policy and current fleet state.</li>
-                      <li>Scheduler decides place, queue, or preempt with reason codes.</li>
-                      <li>Store transaction applies state changes atomically.</li>
-                      <li>Event and telemetry entries are emitted for observability.</li>
-                      <li>Frontend refreshes summary, event log, and charts.</li>
-                    </ol>
-                  </article>
+                    <div className="interactive-diagram" role="img" aria-label="Interactive control plane architecture diagram">
+                      <svg key={`arch-${designFlow}`} className="arch-svg" viewBox="0 0 1100 520" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                          <marker id="arrow-head" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                            <path d="M0,0 L8,4 L0,8 z" className="arch-svg__arrow-head" />
+                          </marker>
+                        </defs>
 
-                  <article className="system-design__card system-design__card--flow">
-                    <h4>Decision and reconciliation loop</h4>
-                    <div className="flow-row">
-                      <div className="flow-node">Submit / Disrupt / Simulate</div>
-                      <div className="flow-arrow">→</div>
-                      <div className="flow-node">Policy checks</div>
-                      <div className="flow-arrow">→</div>
-                      <div className="flow-node">Schedule or queue</div>
+                        <rect x="80" y="24" width="940" height="90" rx="10" className="arch-svg__layer arch-svg__layer--client" />
+                        <text x="102" y="52" className="arch-svg__title">Client layer</text>
+                        <text x="102" y="79" className="arch-svg__text">User view · Admin dashboard · Admin ops</text>
+
+                        <line x1="550" y1="116" x2="550" y2="142" className="arch-svg__link arch-svg__link--active" markerEnd="url(#arrow-head)" />
+
+                        <rect x="80" y="144" width="940" height="116" rx="10" className="arch-svg__layer arch-svg__layer--api" />
+                        <text x="102" y="172" className="arch-svg__title">Gateway + API surface</text>
+                        <text x="102" y="199" className="arch-svg__text mono">{selectedDesignFlow.api}</text>
+                        <text x="102" y="224" className="arch-svg__muted">All APIs are listed below this diagram.</text>
+
+                        <line x1="550" y1="262" x2="550" y2="286" className="arch-svg__link arch-svg__link--active" markerEnd="url(#arrow-head)" />
+
+                        <rect x="80" y="288" width="940" height="116" rx="10" className="arch-svg__layer arch-svg__layer--policy" />
+                        <text x="102" y="316" className="arch-svg__title">Control plane policy engine</text>
+                        <text x="102" y="340" className="arch-svg__text">Hard constraints · class-aware ordering · replica-aware placement</text>
+                        <text x="102" y="362" className="arch-svg__text">Priority preemption · reconcile loop · anti-churn guardrails</text>
+
+                        <line x1="550" y1="406" x2="550" y2="432" className="arch-svg__link arch-svg__link--active" markerEnd="url(#arrow-head)" />
+
+                        <rect x="80" y="434" width="940" height="72" rx="10" className="arch-svg__layer arch-svg__layer--store" />
+                        <text x="102" y="462" className="arch-svg__title">Persistence + observability (Postgres)</text>
+                        <text x="102" y="486" className="arch-svg__text">Atomic state writes -&gt; event log -&gt; telemetry snapshots -&gt; read models</text>
+                      </svg>
                     </div>
-                    <div className="flow-row">
-                      <div className="flow-node">Persist + emit events</div>
-                      <div className="flow-arrow">→</div>
-                      <div className="flow-node">Telemetry snapshot</div>
-                      <div className="flow-arrow">→</div>
-                      <div className="flow-node">Dashboard update</div>
+                    <details className="arch-details">
+                      <summary>All supported APIs</summary>
+                      <div className="diagram-api-list">
+                        {supportedAPIs.map((api) => (
+                          <span key={api} className="mono">{api}</span>
+                        ))}
+                      </div>
+                    </details>
+                  </section>
+                )}
+
+                {designTab === "api-sequences" && (
+                  <section className="panel system-design">
+                    <div className="panel__header">
+                      <h3>API sequence diagrams</h3>
                     </div>
-                    <div className="flow-note">
-                      Reconciler runs continuously to recover failed nodes, retry pending workloads, and keep control-plane state converged.
+
+                    <div className="diagram-toolbar">
+                      {designFlows.map((flow) => (
+                        <button
+                          key={flow.id}
+                          type="button"
+                          className={`chip chip--${flow.tone} design-chip ${designFlow === flow.id ? "design-chip--active" : ""}`}
+                          onClick={() => setDesignFlow(flow.id)}
+                        >
+                          {flow.api}
+                        </button>
+                      ))}
                     </div>
-                  </article>
-                </div>
-              </section>
+
+                    <article className="sequence-card sequence-card--full">
+                      <h4>{selectedDesignFlow.api}</h4>
+                      <svg key={`seq-${designFlow}`} className="sequence-svg" viewBox="0 0 1100 420" preserveAspectRatio="xMidYMid meet">
+                        <defs>
+                          <marker id="seq-arrow-head" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+                            <path d="M0,0 L8,4 L0,8 z" className="arch-svg__arrow-head" />
+                          </marker>
+                        </defs>
+                        {sequenceParticipants.map((participant, idx) => {
+                          const x = 90 + idx * 230;
+                          return (
+                            <g key={participant}>
+                              <rect x={x - 70} y="18" width="140" height="34" rx="7" className="seq-svg__head" />
+                              <text x={x} y="40" textAnchor="middle" className="seq-svg__head-text">{participant}</text>
+                              <line x1={x} y1="60" x2={x} y2="390" className="seq-svg__lifeline" />
+                            </g>
+                          );
+                        })}
+                        {sequenceByFlow[designFlow].map((step, idx) => {
+                          const y = 96 + idx * 56;
+                          const fromIdx = Math.max(sequenceParticipants.indexOf(step.from), 0);
+                          const toIdx = Math.max(sequenceParticipants.indexOf(step.to), 0);
+                          const x1 = 90 + fromIdx * 230;
+                          const x2 = 90 + toIdx * 230;
+                          const left = Math.min(x1, x2);
+                          const width = Math.max(Math.abs(x2 - x1), 2);
+                          const textX = left + width / 2;
+                          return (
+                            <g key={`${step.from}-${step.to}-${idx}`}>
+                              <line
+                                x1={x1}
+                                y1={y}
+                                x2={x2}
+                                y2={y}
+                                className="seq-svg__arrow seq-svg__arrow--active"
+                                markerEnd="url(#seq-arrow-head)"
+                                style={{ "--step-index": idx } as CSSProperties}
+                              />
+                              <rect x={textX - 160} y={y - 22} width="320" height="18" rx="5" className="seq-svg__label-bg" />
+                              <text x={textX} y={y - 9} textAnchor="middle" className="seq-svg__label">{step.action}</text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                      <div className="sequence-note">
+                        Every mutating path ends with both event emission and telemetry snapshot persisted through the control plane into Postgres.
+                      </div>
+                    </article>
+
+                    <article className="sequence-card sequence-card--full">
+                      <h4>Policy groups exercised</h4>
+                      <div className="diagram-policy-grid">
+                        <span>Admission policy: request validation and normalized defaults</span>
+                        <span>Scheduling policy: fit, score, priority, preemption</span>
+                        <span>Reconcile policy: retry pending and recover node state</span>
+                        <span>Audit policy: structured event messages with root-cause hints</span>
+                        <span>Telemetry policy: periodic and mutation-driven snapshots</span>
+                      </div>
+                    </article>
+                  </section>
+                )}
+
+                {designTab === "limitations" && (
+                  <section className="panel system-design">
+                    <div className="panel__header">
+                      <h3>Current limitations and future paths</h3>
+                    </div>
+                    <div className="limitations-list">
+                      {limitationSections.map((section) => (
+                        <details key={section.id} className="limitation-card">
+                          <summary className="limitation-card__summary">
+                            <strong>{section.title}</strong>
+                            <span>Expand</span>
+                          </summary>
+                          <p>{section.note}</p>
+                          {section.refs ? <p className="limitation-card__refs">Code touchpoints: {section.refs}</p> : null}
+                          <p className="limitation-card__future">
+                            <strong>Future direction:</strong> {section.future}
+                          </p>
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                {designTab === "decisions" && (
+                  <section className="panel system-design">
+                    <div className="panel__header">
+                      <h3>Decision-making internals</h3>
+                    </div>
+                    <div className="diagram-toolbar">
+                      <span className="chip chip--success">Class order: inference &gt; training &gt; batch</span>
+                      <span className="chip chip--warning">Capacity preference: on-demand &gt; spot</span>
+                      <span className="chip chip--neutral">Priority gates first, then class/capacity scoring</span>
+                    </div>
+                    <article className="sequence-card sequence-card--full">
+                      <h4>Scoring summary (high level)</h4>
+                      <p className="sequence-line mono">
+                        score(node, workload) = priority_fit + class_weight + capacity_weight + placement_efficiency - churn_penalty
+                      </p>
+                      <p className="sequence-line">
+                        Class weight emphasizes latency-sensitive demand: <strong>inference &gt; training &gt; batch</strong>.
+                        Capacity weight favors reliability/cost policy: <strong>on-demand &gt; spot</strong> unless workload is explicitly spot-tolerant.
+                      </p>
+                    </article>
+                    <div className="limitations-list">
+                      {decisionSections.map((section) => (
+                        <details key={section.id} className="limitation-card">
+                          <summary className="limitation-card__summary">
+                            <strong>{section.title}</strong>
+                            <span>Expand</span>
+                          </summary>
+                          <p>{section.detail}</p>
+                          <p className="limitation-card__future">
+                            <strong>Current behavior:</strong> {section.implementation}
+                          </p>
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                )}
+              </div>
             )}
 
           </section>
