@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/controlplane"
@@ -22,12 +23,17 @@ func NewRouter() http.Handler {
 }
 
 func NewRouterWithStore(appStore store.Store) http.Handler {
-	app := &App{cp: controlplane.New(appStore, nil)}
+	return NewRouterWithControlPlane(controlplane.New(appStore, nil))
+}
+
+func NewRouterWithControlPlane(cp *controlplane.Service) http.Handler {
+	app := &App{cp: cp}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /nodes", app.listNodes)
 	mux.HandleFunc("GET /fleet/summary", app.fleetSummary)
+	mux.HandleFunc("GET /telemetry", app.telemetry)
 	mux.HandleFunc("GET /events", app.listEvents)
 	mux.HandleFunc("GET /workloads", app.listWorkloads)
 	mux.HandleFunc("POST /workloads", app.createWorkload)
@@ -35,6 +41,7 @@ func NewRouterWithStore(appStore store.Store) http.Handler {
 	mux.HandleFunc("POST /scheduler/tick", app.schedulerTick)
 	mux.HandleFunc("POST /admin/demo/seed", app.seedDemoData)
 	mux.HandleFunc("POST /admin/demo/clear", app.clearDemoData)
+	mux.HandleFunc("POST /admin/simulations/{scenario}", app.runSimulation)
 	mux.HandleFunc("POST /admin/nodes/{id}/fail", app.failNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/recover", app.recoverNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/preempt-spot", app.preemptSpotNode)
@@ -179,6 +186,15 @@ func (app *App) clearDemoData(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, demoDataResponse{Action: "clear", DemoDataSummary: summary})
 }
 
+func (app *App) runSimulation(w http.ResponseWriter, r *http.Request) {
+	result, err := app.cp.RunSimulation(r.PathValue("scenario"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (app *App) failNode(w http.ResponseWriter, r *http.Request) {
 	result, err := app.cp.FailNode(r.PathValue("id"))
 	if err != nil {
@@ -208,6 +224,16 @@ func (app *App) preemptSpotNode(w http.ResponseWriter, r *http.Request) {
 
 func (app *App) fleetSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, app.cp.FleetSummary())
+}
+
+func (app *App) telemetry(w http.ResponseWriter, r *http.Request) {
+	limit := 0
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	writeJSON(w, http.StatusOK, app.cp.TelemetryHistory(limit))
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

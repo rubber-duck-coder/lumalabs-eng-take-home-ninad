@@ -13,8 +13,9 @@ import (
 type Recorder struct {
 	store store.Store
 	now   func() time.Time
-	seq   atomic.Uint64
 }
+
+var globalSeq atomic.Uint64
 
 func New(appStore store.Store, now func() time.Time) *Recorder {
 	if now == nil {
@@ -73,6 +74,6 @@ func rejectedMetadata(rejected []scheduler.RejectedNode) map[string]string {
 }
 
 func (r *Recorder) nextID(prefix string, now time.Time) string {
-	seq := r.seq.Add(1)
+	seq := globalSeq.Add(1)
 	return prefix + "-" + strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.FormatUint(seq, 36)
 }

@@ -251,6 +251,16 @@ func (s *PostgresStore) UpdateWorkload(id string, fn func(*domain.Workload) erro
 	return updated, err
 }
 
+func (s *PostgresStore) CompleteExpiredWorkloads(now time.Time) ([]domain.Workload, error) {
+	var completed []domain.Workload
+	err := s.withState(context.Background(), func(state *MemoryStore) error {
+		var err error
+		completed, err = state.CompleteExpiredWorkloads(now)
+		return err
+	}, nil)
+	return completed, err
+}
+
 func (s *PostgresStore) ScheduleWorkload(id string, now time.Time) (SchedulingResult, error) {
 	var result SchedulingResult
 	err := s.withState(context.Background(), func(state *MemoryStore) error {
@@ -390,7 +400,7 @@ func (s *PostgresStore) ListEvents() []domain.Event {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, timestamp, type, actor, workload_id, node_id, message, metadata
 		FROM events
-		ORDER BY timestamp, id
+		ORDER BY timestamp DESC, id DESC
 	`)
 	if err != nil {
 		return nil

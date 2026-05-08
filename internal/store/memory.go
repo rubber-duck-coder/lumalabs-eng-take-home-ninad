@@ -155,7 +155,7 @@ func (s *MemoryStore) SeedDemoData() (DemoDataSummary, error) {
 			GPUType:               "A100",
 			GPUCount:              4,
 			Priority:              domain.WorkloadPriorityHigh,
-			DurationSeconds:       1800,
+			DurationSeconds:       12,
 			SpotTolerant:          true,
 			State:                 domain.WorkloadStateRunning,
 			Placement:             &domain.Placement{NodeID: "node-a100-od-1", Region: "us-west-2", DataCenter: "sfo-1", Zone: "usw2-az1", Provider: "aws"},
@@ -169,7 +169,7 @@ func (s *MemoryStore) SeedDemoData() (DemoDataSummary, error) {
 			GPUType:               "H100",
 			GPUCount:              12,
 			Priority:              domain.WorkloadPriorityNormal,
-			DurationSeconds:       900,
+			DurationSeconds:       12,
 			SpotTolerant:          false,
 			State:                 domain.WorkloadStatePending,
 			StatusReason:          "queued; waiting for a larger H100 fit",
@@ -183,7 +183,7 @@ func (s *MemoryStore) SeedDemoData() (DemoDataSummary, error) {
 			GPUType:               "L4",
 			GPUCount:              1,
 			Priority:              domain.WorkloadPriorityLow,
-			DurationSeconds:       300,
+			DurationSeconds:       8,
 			SpotTolerant:          true,
 			Resumable:             true,
 			State:                 domain.WorkloadStatePending,
@@ -308,6 +308,54 @@ func (s *MemoryStore) UpdateWorkload(id string, fn func(*domain.Workload) error)
 
 	s.workloads[id] = cloneWorkload(updated)
 	return cloneWorkload(updated), nil
+}
+
+func (s *MemoryStore) CompleteExpiredWorkloads(now time.Time) ([]domain.Workload, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	completed := make([]domain.Workload, 0)
+	for _, workload := range s.workloads {
+		if workload.State != domain.WorkloadStateRunning || workload.DurationSeconds <= 0 {
+			continue
+		}
+		if workload.UpdatedAt.Add(time.Duration(workload.DurationSeconds) * time.Second).After(now) {
+			continue
+		}
+
+		updated := cloneWorkload(workload)
+		updated.State = domain.WorkloadStateCompleted
+		updated.StatusReason = "workload completed after requested duration"
+		updated.SchedulingExplanation = updated.StatusReason
+		updated.UpdatedAt = now
+
+		released := updated.GPUCount
+		if updated.Placement != nil {
+			if node, ok := s.nodes[updated.Placement.NodeID]; ok {
+				node.AllocatedGPUs = max(0, node.AllocatedGPUs-released)
+				node.RunningWorkloadIDs = removeString(node.RunningWorkloadIDs, updated.ID)
+				node.UpdatedAt = now
+				s.nodes[node.ID] = cloneNode(node)
+			}
+		}
+		for _, placement := range updated.ReplicaPlacements {
+			if updated.Placement != nil && placement.NodeID == updated.Placement.NodeID {
+				continue
+			}
+			if node, ok := s.nodes[placement.NodeID]; ok {
+				node.AllocatedGPUs = max(0, node.AllocatedGPUs-updated.GPUCount)
+				node.RunningWorkloadIDs = removeString(node.RunningWorkloadIDs, updated.ID)
+				node.UpdatedAt = now
+				s.nodes[node.ID] = cloneNode(node)
+			}
+		}
+
+		updated.Placement = nil
+		updated.ReplicaPlacements = nil
+		s.workloads[updated.ID] = cloneWorkload(updated)
+		completed = append(completed, cloneWorkload(updated))
+	}
+	return completed, nil
 }
 
 func (s *MemoryStore) ScheduleWorkload(id string, now time.Time) (SchedulingResult, error) {
@@ -1003,9 +1051,9 @@ func (s *MemoryStore) ListEvents() []domain.Event {
 	}
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].Timestamp.Equal(events[j].Timestamp) {
-			return events[i].ID < events[j].ID
+			return events[i].ID > events[j].ID
 		}
-		return events[i].Timestamp.Before(events[j].Timestamp)
+		return events[i].Timestamp.After(events[j].Timestamp)
 	})
 	return events
 }
@@ -1484,6 +1532,17 @@ func removeWorkloadIDs(existing []string, victims []domain.Workload) []string {
 			continue
 		}
 		out = append(out, id)
+	}
+	return out
+}
+
+func removeString(existing []string, target string) []string {
+	out := make([]string, 0, len(existing))
+	for _, value := range existing {
+		if value == target {
+			continue
+		}
+		out = append(out, value)
 	}
 	return out
 }

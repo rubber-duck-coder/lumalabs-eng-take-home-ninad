@@ -1,59 +1,30 @@
 package reconciler
 
-import (
-	"testing"
-	"time"
+import "testing"
 
-	"github.com/ninadsindu/luma-gpu-control-plane/internal/domain"
-	"github.com/ninadsindu/luma-gpu-control-plane/internal/store"
-)
+type fakeRunner struct {
+	changed int
+	err     error
+	calls   int
+}
 
-func TestRunOnceHealsRecoveringNodes(t *testing.T) {
-	appStore := store.NewSeededMemoryStore()
-	mgr := New(appStore, fixedReconcilerTime)
+func (f *fakeRunner) Reconcile() (int, error) {
+	f.calls++
+	return f.changed, f.err
+}
+
+func TestRunOnceDelegatesToRunner(t *testing.T) {
+	runner := &fakeRunner{changed: 2}
+	mgr := New(runner)
 
 	changed, err := mgr.RunOnce()
 	if err != nil {
 		t.Fatalf("run once: %v", err)
 	}
-	if changed == 0 {
-		t.Fatal("expected at least one node to be reconciled")
+	if changed != 2 {
+		t.Fatalf("expected 2 changed nodes, got %d", changed)
 	}
-
-	node, ok := appStore.GetNode("node-l4-od-1")
-	if !ok {
-		t.Fatal("expected seeded node to exist")
+	if runner.calls != 1 {
+		t.Fatalf("expected one call, got %d", runner.calls)
 	}
-	if node.Health != domain.NodeHealthHealthy {
-		t.Fatalf("expected node to be healthy, got %s", node.Health)
-	}
-
-	events := appStore.ListEvents()
-	if !hasReconcilerEvent(events, "node_reconciled") {
-		t.Fatalf("expected node_reconciled event, got types=%v", reconcilerEventTypes(events))
-	}
-	if !hasReconcilerEvent(events, "workload_scheduled") && !hasReconcilerEvent(events, "workload_queued") {
-		t.Fatalf("expected scheduling events, got types=%v", reconcilerEventTypes(events))
-	}
-}
-
-func fixedReconcilerTime() time.Time {
-	return time.Date(2026, time.May, 7, 13, 0, 0, 0, time.UTC)
-}
-
-func hasReconcilerEvent(events []domain.Event, want string) bool {
-	for _, event := range events {
-		if event.Type == want {
-			return true
-		}
-	}
-	return false
-}
-
-func reconcilerEventTypes(events []domain.Event) []string {
-	types := make([]string, 0, len(events))
-	for _, event := range events {
-		types = append(types, event.Type)
-	}
-	return types
 }

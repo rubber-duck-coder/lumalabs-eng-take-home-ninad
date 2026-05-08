@@ -8,8 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ninadsindu/luma-gpu-control-plane/internal/controlplane"
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/gateway"
-	"github.com/ninadsindu/luma-gpu-control-plane/internal/reconciler"
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/store"
 )
 
@@ -24,11 +24,13 @@ func main() {
 		log.Fatalf("store init failed: %v", err)
 	}
 
-	startReconciler(appStore)
+	cp := controlplane.New(appStore, nil)
+	startReconciler(cp)
+	startTelemetrySampler(cp)
 
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: gateway.NewRouterWithStore(appStore),
+		Handler: gateway.NewRouterWithControlPlane(cp),
 	}
 
 	log.Printf("control plane listening on :%s", port)
@@ -37,20 +39,19 @@ func main() {
 	}
 }
 
-func startReconciler(appStore store.Store) {
-	interval := 15 * time.Second
+func startReconciler(cp *controlplane.Service) {
+	interval := 3 * time.Second
 	if raw := os.Getenv("RECONCILE_INTERVAL_SECONDS"); raw != "" {
 		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
 			interval = time.Duration(seconds) * time.Second
 		}
 	}
 
-	manager := reconciler.New(appStore, nil)
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for range ticker.C {
-			changed, err := manager.RunOnce()
+			changed, err := cp.Reconcile()
 			if err != nil {
 				log.Printf("reconciler tick failed: %v", err)
 				continue
@@ -58,6 +59,23 @@ func startReconciler(appStore store.Store) {
 			if changed > 0 {
 				log.Printf("reconciler healed %d node(s)", changed)
 			}
+		}
+	}()
+}
+
+func startTelemetrySampler(cp *controlplane.Service) {
+	interval := 3 * time.Second
+	if raw := os.Getenv("TELEMETRY_INTERVAL_SECONDS"); raw != "" {
+		if seconds, err := strconv.Atoi(raw); err == nil && seconds > 0 {
+			interval = time.Duration(seconds) * time.Second
+		}
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for range ticker.C {
+			cp.RecordTelemetry()
 		}
 	}()
 }

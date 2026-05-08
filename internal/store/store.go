@@ -13,6 +13,7 @@ type Store interface {
 	GetWorkload(id string) (domain.Workload, bool)
 	ListWorkloads() []domain.Workload
 	UpdateWorkload(id string, fn func(*domain.Workload) error) (domain.Workload, error)
+	CompleteExpiredWorkloads(now time.Time) ([]domain.Workload, error)
 	ScheduleWorkload(id string, now time.Time) (SchedulingResult, error)
 	SchedulePendingWorkloads(now time.Time) ([]SchedulingResult, error)
 	FailNode(id string, now time.Time) (DisruptionResult, error)

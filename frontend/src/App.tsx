@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useMemo, useState } from "react";
 
 type Workload = {
   id: string;
@@ -56,17 +56,37 @@ type Event = {
   metadata?: Record<string, string>;
 };
 
+type TelemetrySnapshot = {
+  timestamp: string;
+  total_gpus: number;
+  allocated_gpus: number;
+  available_gpus: number;
+  failed_gpus?: number;
+  utilization_percent: number;
+  healthy_nodes: number;
+  recovering_nodes: number;
+  failed_nodes: number;
+  pending_workloads: number;
+  running_workloads: number;
+  completed_workloads?: number;
+  suspended_workloads?: number;
+};
+
 type FleetSummary = {
   total_gpus: number;
   allocated_gpus: number;
   available_gpus: number;
+  failed_gpus?: number;
   utilization_percent: number;
-  gpu_types?: Record<string, { total: number; allocated: number }>;
+  gpu_types?: Record<string, { total: number; allocated: number; available?: number; failed?: number }>;
   workloads_by_state?: Record<string, number>;
 };
 
 type NodeAction = "fail" | "recover" | "preempt-spot";
-type ViewKey = "user-view" | "admin-dashboard" | "admin-ops";
+type SimulationScenario = "sudden-inference-spike" | "spot-preemption" | "node-failures" | "capacity-exhausted";
+type ViewKey = "user-view" | "admin-dashboard" | "admin-ops" | "system-design";
+type UserTabKey = "submit" | "monitoring";
+type DashboardTabKey = "summary" | "events";
 
 type DisruptionResult = {
   node?: Node;
@@ -80,6 +100,20 @@ type DemoDataResult = {
   nodes: number;
   workloads: number;
   events: number;
+};
+
+type SimulationResult = {
+  scenario: SimulationScenario;
+  message: string;
+  workloads?: Workload[];
+  disruptions?: DisruptionResult[];
+  scheduled?: unknown[];
+};
+
+type TelemetrySeries = {
+  label: string;
+  color: string;
+  values: number[];
 };
 
 const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
@@ -136,7 +170,82 @@ function summarizeWorkloadReason(workload: Workload) {
 
 function formatTimestamp(value: string) {
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function titleize(value: string) {
+  return value
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatEventType(type: string) {
+  return titleize(type);
+}
+
+function formatEventMessage(event: Event) {
+  const scenario = event.metadata?.scenario;
+  if (scenario) {
+    if (event.type === "simulation_started") return `${titleize(scenario)} started`;
+    if (event.type === "simulation_completed") return `${titleize(scenario)} completed`;
+    if (event.type === "simulation_failed") return `${titleize(scenario)} failed`;
+  }
+  return shortText(event.message, 88);
+}
+
+function metadataEntries(event: Event) {
+  const entries: Array<[string, string]> = [];
+  if (event.node_id) entries.push(["target_node", event.node_id]);
+  if (event.workload_id) entries.push(["target_workload", event.workload_id]);
+  if (event.metadata) entries.push(...Object.entries(event.metadata));
+  return entries;
+}
+
+function buildTelemetrySnapshot(
+  summary: FleetSummary | null,
+  nodes: Node[],
+  workloads: Workload[]
+): TelemetrySnapshot {
+  const totalGPUs =
+    summary?.total_gpus ?? nodes.reduce((total, node) => total + node.total_gpus, 0);
+  const allocatedGPUs =
+    summary?.allocated_gpus ?? nodes.reduce((total, node) => total + node.allocated_gpus, 0);
+  const availableGPUs = summary?.available_gpus ?? Math.max(0, totalGPUs - allocatedGPUs);
+  const failedGPUs =
+    summary?.failed_gpus ?? nodes.filter((node) => node.health === "failed").reduce((total, node) => total + node.total_gpus, 0);
+  const utilizationPercent =
+    summary?.utilization_percent ?? (totalGPUs > 0 ? (allocatedGPUs / totalGPUs) * 100 : 0);
+
+  return {
+    timestamp: new Date().toISOString(),
+    total_gpus: totalGPUs,
+    allocated_gpus: allocatedGPUs,
+    available_gpus: availableGPUs,
+    failed_gpus: failedGPUs,
+    utilization_percent: utilizationPercent,
+    healthy_nodes: nodes.filter((node) => node.health === "healthy").length,
+    recovering_nodes: nodes.filter((node) => node.health === "recovering").length,
+    failed_nodes: nodes.filter((node) => node.health === "failed").length,
+    pending_workloads: workloads.filter((workload) => workload.state === "pending").length,
+    running_workloads: workloads.filter((workload) => workload.state === "running").length,
+    completed_workloads: workloads.filter((workload) => workload.state === "completed").length,
+    suspended_workloads: workloads.filter((workload) => workload.state === "preempted").length
+  };
+}
+
+function mergeTelemetrySnapshots(existing: TelemetrySnapshot[], incoming: TelemetrySnapshot[]) {
+  const merged = new Map<string, TelemetrySnapshot>();
+  for (const snapshot of existing) {
+    merged.set(snapshot.timestamp, snapshot);
+  }
+  for (const snapshot of incoming) {
+    merged.set(snapshot.timestamp, snapshot);
+  }
+  return Array.from(merged.values()).sort(
+    (left, right) => new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime()
+  );
 }
 
 function clampCount(value: number) {
@@ -159,11 +268,102 @@ function eventTone(value: string) {
   return "neutral";
 }
 
+function lastValue(values: number[]) {
+  return values.length > 0 ? values[values.length - 1] : 0;
+}
+
+function formatChartTime(value?: string) {
+  if (!value) return "time";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "time" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function chartMinMax(series: TelemetrySeries[]) {
+  const values = series.flatMap((entry) => entry.values);
+  const max = values.length > 0 ? Math.max(...values) : 1;
+  return { min: 0, max: Math.max(1, max) };
+}
+
+function chartPoints(values: number[], width: number, height: number, min: number, max: number) {
+  if (values.length === 0) {
+    return "";
+  }
+
+  const usableWidth = width - 16;
+  const usableHeight = height - 16;
+  const step = values.length === 1 ? 0 : usableWidth / (values.length - 1);
+  const range = max - min || 1;
+
+  return values
+    .map((value, index) => {
+      const x = 8 + step * index;
+      const y = 8 + usableHeight - ((value - min) / range) * usableHeight;
+      return `${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function TelemetryChart({
+  title,
+  subtitle,
+  series,
+  timestamps,
+  yLabel = "count",
+}: {
+  title: string;
+  subtitle: string;
+  series: TelemetrySeries[];
+  timestamps: string[];
+  yLabel?: string;
+}) {
+  const width = 320;
+  const height = 128;
+  const { min, max } = chartMinMax(series);
+
+  return (
+    <article className="telemetry-chart">
+      <div className="telemetry-chart__header">
+        <div>
+          <h4>{title}</h4>
+          <span>{subtitle}</span>
+        </div>
+        <div className="telemetry-chart__badges">
+          {series.map((entry) => (
+            <span key={entry.label} className="meta-pill telemetry-chart__badge">
+              <span className="telemetry-chart__swatch" style={{ backgroundColor: entry.color }} />
+              {entry.label}: {lastValue(entry.values)}
+            </span>
+          ))}
+        </div>
+      </div>
+      <svg className="telemetry-chart__svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+        <line x1="8" y1={height - 8} x2={width - 8} y2={height - 8} className="telemetry-chart__axis" />
+        <line x1="8" y1="8" x2="8" y2={height - 8} className="telemetry-chart__axis" />
+        {series.map((entry) => (
+          <polyline
+            key={entry.label}
+            className="telemetry-chart__line"
+            points={chartPoints(entry.values, width, height, min, max)}
+            stroke={entry.color}
+          />
+        ))}
+      </svg>
+      <div className="telemetry-chart__axis-labels">
+        <span>Y: {yLabel}</span>
+        <span>
+          X: time {formatChartTime(timestamps[0])} - {formatChartTime(timestamps[timestamps.length - 1])}
+        </span>
+      </div>
+    </article>
+  );
+}
+
 export function App() {
   const [workloads, setWorkloads] = useState<Workload[]>([]);
   const [summary, setSummary] = useState<FleetSummary | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
+  const [telemetry, setTelemetry] = useState<TelemetrySnapshot[]>([]);
   const [result, setResult] = useState<Workload | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [workloadType, setWorkloadType] = useState<Workload["type"]>("training");
@@ -173,16 +373,57 @@ export function App() {
   const [submitting, setSubmitting] = useState(false);
   const [adminAction, setAdminAction] = useState<NodeAction | null>(null);
   const [demoAction, setDemoAction] = useState<"seed" | "clear" | null>(null);
+  const [simulationAction, setSimulationAction] = useState<SimulationScenario | null>(null);
   const [tickLoading, setTickLoading] = useState(false);
   const [activeView, setActiveView] = useState<ViewKey>("user-view");
+  const [userTab, setUserTab] = useState<UserTabKey>("submit");
+  const [dashboardTab, setDashboardTab] = useState<DashboardTabKey>("summary");
+  const telemetryUtilizationSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.utilization_percent),
+    [telemetry]
+  );
+  const telemetryAvailableSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.available_gpus),
+    [telemetry]
+  );
+  const telemetryAllocatedSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.allocated_gpus),
+    [telemetry]
+  );
+  const telemetryFailedGPUSeries = useMemo(() => telemetry.map((snapshot) => snapshot.failed_gpus ?? 0), [telemetry]);
+  const telemetryHealthySeries = useMemo(() => telemetry.map((snapshot) => snapshot.healthy_nodes), [telemetry]);
+  const telemetryRecoveringSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.recovering_nodes),
+    [telemetry]
+  );
+  const telemetryFailedSeries = useMemo(() => telemetry.map((snapshot) => snapshot.failed_nodes), [telemetry]);
+  const telemetryRunningWorkloadSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.running_workloads),
+    [telemetry]
+  );
+  const telemetryPendingWorkloadSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.pending_workloads),
+    [telemetry]
+  );
+  const telemetryCompletedWorkloadSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.completed_workloads ?? 0),
+    [telemetry]
+  );
+  const telemetrySuspendedWorkloadSeries = useMemo(
+    () => telemetry.map((snapshot) => snapshot.suspended_workloads ?? 0),
+    [telemetry]
+  );
+  const latestTelemetry = telemetry.length > 0 ? telemetry[telemetry.length - 1] : null;
+  const telemetryTimestamps = useMemo(() => telemetry.map((snapshot) => snapshot.timestamp), [telemetry]);
 
   async function refreshAll() {
     setLoading(true);
-    const [workloadsResult, summaryResult, nodesResult, eventsResult] = await Promise.allSettled([
+    const [workloadsResult, summaryResult, nodesResult, eventsResult, telemetryResult] = await Promise.allSettled([
       requestJSON<Workload[]>("/workloads"),
       requestJSON<FleetSummary>("/fleet/summary"),
       requestJSON<Node[]>("/nodes"),
-      requestJSON<Event[]>("/events")
+      requestJSON<Event[]>("/events"),
+      requestJSON<TelemetrySnapshot[]>("/telemetry?limit=180")
     ]);
 
     const errors: string[] = [];
@@ -217,6 +458,26 @@ export function App() {
       errors.push(`events: ${formatError(eventsResult.reason)}`);
     }
 
+    if (telemetryResult.status === "fulfilled") {
+      if (telemetryResult.value.length > 0) {
+        setTelemetry((current) => mergeTelemetrySnapshots(current, telemetryResult.value).slice(-180));
+      } else {
+        const liveSnapshot = buildTelemetrySnapshot(
+          summaryResult.status === "fulfilled" ? summaryResult.value : null,
+          nodesResult.status === "fulfilled" ? nodesResult.value : [],
+          workloadsResult.status === "fulfilled" ? workloadsResult.value : []
+        );
+        setTelemetry((current) => [...current.slice(-179), liveSnapshot]);
+      }
+    } else {
+      const liveSnapshot = buildTelemetrySnapshot(
+        summaryResult.status === "fulfilled" ? summaryResult.value : null,
+        nodesResult.status === "fulfilled" ? nodesResult.value : [],
+        workloadsResult.status === "fulfilled" ? workloadsResult.value : []
+      );
+      setTelemetry((current) => [...current.slice(-179), liveSnapshot]);
+    }
+
     setError(errors.join(" | "));
     setLoading(false);
   }
@@ -228,7 +489,7 @@ export function App() {
   useEffect(() => {
     const syncFromHash = () => {
       const hash = window.location.hash.replace("#", "") as ViewKey;
-      if (hash === "user-view" || hash === "admin-dashboard" || hash === "admin-ops") {
+      if (hash === "user-view" || hash === "admin-dashboard" || hash === "admin-ops" || hash === "system-design") {
         setActiveView(hash);
       }
     };
@@ -275,13 +536,11 @@ export function App() {
         {
           id: "user-view" as const,
           label: "User view",
-          description: "Submit workloads and monitor placement without leaving the page.",
           meta: [`${workloadSummary.total} workloads`, `${workloadSummary.active} active`]
         },
         {
           id: "admin-dashboard" as const,
           label: "Admin dashboard",
-          description: "Inspect health, utilization, and the latest system events.",
           meta: [
             `${summary ? summary.utilization_percent.toFixed(1) : "—"}% utilization`,
             `${healthyNodes.length} healthy nodes`
@@ -295,28 +554,38 @@ export function App() {
         {
           id: "admin-ops" as const,
           label: "Admin ops",
-          description: "Trigger node disruption, seed, clear, and scheduler actions.",
           meta: [`${failedNodes.length} failed`, `${recoveringNodes.length} recovering`]
+        }
+      ]
+    },
+    {
+      label: "Architecture",
+      items: [
+        {
+          id: "system-design" as const,
+          label: "System design overview",
+          meta: ["Request flow", "Scheduling + reconcile"]
         }
       ]
     }
   ];
 
-  const viewMeta: Record<ViewKey, { eyebrow: string; title: string; description: string }> = {
+  const viewMeta: Record<ViewKey, { eyebrow: string; title: string }> = {
     "user-view": {
-      eyebrow: "Page 1",
-      title: "Submit workloads and monitor placement",
-      description: "Keep the submit path fast, visible, and tied to the live API."
+      eyebrow: "User",
+      title: "Submit workloads and monitor placement"
     },
     "admin-dashboard": {
-      eyebrow: "Page 2",
-      title: "System health, metrics, and event history",
-      description: "Fast view of fleet health, utilization, and capacity mix."
+      eyebrow: "Dashboard",
+      title: "System health, metrics, and event history"
     },
     "admin-ops": {
-      eyebrow: "Page 3",
-      title: "Node disruption controls",
-      description: "Choose a node, then apply failure, recovery, or spot preemption."
+      eyebrow: "Ops",
+      title: "Node disruption controls"
+    },
+    "system-design": {
+      eyebrow: "Architecture",
+      title: "Control plane system design overview"
     }
   };
 
@@ -430,7 +699,39 @@ export function App() {
     }
   }
 
+  async function handleSimulation(scenario: SimulationScenario) {
+    setError("");
+    setStatusMessage("");
+    setSimulationAction(scenario);
+
+    try {
+      const response = await requestJSON<SimulationResult>(`/admin/simulations/${scenario}`, {
+        method: "POST"
+      });
+      setStatusMessage(response.message);
+      await refreshAll();
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setSimulationAction(null);
+    }
+  }
+
   const activePage = viewMeta[activeView];
+  const simulationOptions: Array<{ id: SimulationScenario; label: string; signal: string }> = [
+    { id: "sudden-inference-spike", label: "Sudden inference spike", signal: "inference demand" },
+    { id: "spot-preemption", label: "Spot preemption", signal: "spot interruption" },
+    { id: "node-failures", label: "Node failures", signal: "health degradation" },
+    { id: "capacity-exhausted", label: "Capacity exhausted", signal: "pending queue" }
+  ];
+  const userTabs: Array<{ id: UserTabKey; label: string }> = [
+    { id: "submit", label: "Submit workload" },
+    { id: "monitoring", label: "Workload monitoring" }
+  ];
+  const dashboardTabs: Array<{ id: DashboardTabKey; label: string }> = [
+    { id: "summary", label: "Fleet summary" },
+    { id: "events", label: "Event log" }
+  ];
 
   return (
     <main className="page">
@@ -441,21 +742,7 @@ export function App() {
         <aside className="sidebar" aria-label="Dashboard navigation and overview">
           <div className="sidebar__panel">
             <span className="sidebar__eyebrow">Overview</span>
-            <h2>Live fleet navigation</h2>
-            <p>Choose a page to switch between user, dashboard, and operations views.</p>
-            <div className="sidebar__actions">
-              <button
-                className="button button--secondary"
-                onClick={() => refreshAll().catch((err) => setError(formatError(err)))}
-                disabled={loading}
-                type="button"
-              >
-                {loading ? "Refreshing..." : "Refresh all"}
-              </button>
-              <button className="button button--secondary" onClick={handleTick} disabled={tickLoading} type="button">
-                {tickLoading ? "Ticking..." : "Run scheduler tick"}
-              </button>
-            </div>
+            <h2>Fleet console</h2>
           </div>
 
           <nav className="sidebar__nav" aria-label="Primary navigation">
@@ -474,7 +761,6 @@ export function App() {
                         <strong>{item.label}</strong>
                         <span>{activeView === item.id ? "Open" : "View"}</span>
                       </div>
-                      <p>{item.description}</p>
                       <div className="nav-item__meta">
                         {item.meta.map((meta) => (
                           <span key={meta} className="meta-pill">
@@ -489,35 +775,6 @@ export function App() {
             ))}
           </nav>
 
-          <div className="sidebar__panel sidebar__panel--compact">
-            <span className="sidebar__eyebrow">Live snapshot</span>
-            <div className="sidebar-stats">
-              <div>
-                <strong>{summary ? summary.total_gpus : "—"}</strong>
-                <span>Total GPUs</span>
-              </div>
-              <div>
-                <strong>{summary ? summary.available_gpus : "—"}</strong>
-                <span>Available</span>
-              </div>
-              <div>
-                <strong>{workloadSummary.pending}</strong>
-                <span>Pending</span>
-              </div>
-              <div>
-                <strong>{workloadSummary.running}</strong>
-                <span>Running</span>
-              </div>
-            </div>
-            <div className="sidebar__totals">
-              <span className="meta-pill">Workloads: {workloads.length}</span>
-              <span className="meta-pill">Active: {activeWorkloads.length}</span>
-              <span className="meta-pill">Nodes: {nodes.length}</span>
-              <span className="meta-pill meta-pill--success">Healthy: {healthyNodes.length}</span>
-              <span className="meta-pill meta-pill--warning">Recovering: {recoveringNodes.length}</span>
-              <span className="meta-pill meta-pill--danger">Failed: {failedNodes.length}</span>
-            </div>
-          </div>
         </aside>
 
         <div className="workspace__main" id="page-content">
@@ -526,334 +783,465 @@ export function App() {
               <div>
                 <span className="content-section__eyebrow">{activePage.eyebrow}</span>
                 <h2>{activePage.title}</h2>
-                <p>{activePage.description}</p>
-              </div>
-              <div className="content-section__switcher" role="tablist" aria-label="View switcher">
-                {Object.entries(viewMeta).map(([view, meta]) => (
-                  <button
-                    key={view}
-                    type="button"
-                    className={`switcher-pill ${activeView === view ? "switcher-pill--active" : ""}`}
-                    onClick={() => openView(view as ViewKey)}
-                  >
-                    {meta.eyebrow}
-                  </button>
-                ))}
               </div>
             </div>
 
             {activeView === "user-view" && (
-              <div className="dashboard-grid">
-                <section className="panel panel--span-7">
-                  <div className="panel__header">
-                    <div>
-                      <h3>Submit Workload</h3>
-                      <p>Create a workload against the current fleet state.</p>
-                    </div>
-                  </div>
-                  <form onSubmit={onSubmit} className="form-grid">
-                  <label>
-                    Type
-                    <select name="type" value={workloadType} onChange={(event) => setWorkloadType(event.target.value as Workload["type"])}>
-                      <option value="training">training</option>
-                      <option value="inference">inference</option>
-                      <option value="batch">batch</option>
-                    </select>
-                  </label>
-                    <label>
-                      GPU Type
-                      <select name="gpu_type" defaultValue="A100">
-                        <option value="H100">H100</option>
-                        <option value="A100">A100</option>
-                        <option value="L4">L4</option>
-                      </select>
-                    </label>
-                    <label>
-                      GPU Count
-                      <input name="gpu_count" type="number" min={1} defaultValue={1} required />
-                    </label>
-                    <label>
-                      Priority
-                      <select name="priority" defaultValue="normal">
-                        <option value="high">high</option>
-                        <option value="normal">normal</option>
-                        <option value="low">low</option>
-                      </select>
-                    </label>
-                  <label>
-                    Duration Seconds
-                    <input name="duration_seconds" type="number" min={1} defaultValue={300} required />
-                  </label>
-                  {workloadType === "inference" ? (
-                    <label>
-                      Replicas
-                      <input name="replicas" type="number" min={1} defaultValue={2} />
-                    </label>
-                  ) : null}
-                  <label className="checkbox">
-                    <input name="spot_tolerant" type="checkbox" defaultChecked />
-                    Spot tolerant
-                    </label>
-                    <label className="checkbox">
-                      <input name="resumable" type="checkbox" />
-                      Resumable
-                    </label>
-                    <button className="button button--primary button--form" disabled={submitting} type="submit">
-                      {submitting ? "Submitting..." : "Submit workload"}
+              <div className="tab-view">
+                <div className="tab-bar" role="tablist" aria-label="User view tabs">
+                  {userTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`tab-pill ${userTab === tab.id ? "tab-pill--active" : ""}`}
+                      onClick={() => setUserTab(tab.id)}
+                    >
+                      {tab.label}
                     </button>
-                  </form>
-                  {result && (
-                    <div className="inline-card">
-                      <div className="inline-card__title">
-                        <span>Last submission</span>
-                        <strong>{result.id}</strong>
-                      </div>
-                    <div className="inline-card__body">
-                      <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
-                      <span>{result.type}</span>
-                      <span>
-                        {result.gpu_type} x {result.gpu_count}
-                      </span>
-                      {result.type === "inference" && <span>{result.replicas ?? 1} replica(s)</span>}
-                      <span>{result.priority}</span>
-                      {result.resumable && <span>Resumable</span>}
-                      {result.placement?.node_id && <span>Placed on {result.placement.node_id}</span>}
-                      {result.replica_placements?.length ? (
-                        <span>{result.replica_placements.length} placement(s)</span>
-                      ) : null}
+                  ))}
+                </div>
+
+                {userTab === "submit" && (
+                  <section className="panel">
+                    <div className="panel__header">
+                      <h3>Submit Workload</h3>
                     </div>
-                      {result.status_reason && <p className="muted">{result.status_reason}</p>}
-                      {result.scheduling_explanation && <p className="muted">{result.scheduling_explanation}</p>}
-                      {(result.preempt_notice_seconds || result.checkpoint_state || result.resume_eligible) && (
-                        <div className="event-meta">
-                          {result.preempt_notice_seconds ? (
-                            <span className="event-meta__item">notice: {result.preempt_notice_seconds}s</span>
-                          ) : null}
-                          {result.checkpoint_state ? (
-                            <span className="event-meta__item">checkpoint: {result.checkpoint_state}</span>
-                          ) : null}
-                          {result.resume_eligible ? (
-                            <span className="event-meta__item">resume eligible</span>
+                    <form onSubmit={onSubmit} className="form-grid">
+                      <label>
+                        Type
+                        <select name="type" value={workloadType} onChange={(event) => setWorkloadType(event.target.value as Workload["type"])}>
+                          <option value="training">training</option>
+                          <option value="inference">inference</option>
+                          <option value="batch">batch</option>
+                        </select>
+                      </label>
+                      <label>
+                        GPU Type
+                        <select name="gpu_type" defaultValue="A100">
+                          <option value="H100">H100</option>
+                          <option value="A100">A100</option>
+                          <option value="L4">L4</option>
+                        </select>
+                      </label>
+                      <label>
+                        GPU Count
+                        <input name="gpu_count" type="number" min={1} defaultValue={1} required />
+                      </label>
+                      <label>
+                        Priority
+                        <select name="priority" defaultValue="normal">
+                          <option value="high">high</option>
+                          <option value="normal">normal</option>
+                          <option value="low">low</option>
+                        </select>
+                      </label>
+                      <label>
+                        Duration Seconds
+                        <input name="duration_seconds" type="number" min={1} defaultValue={300} required />
+                      </label>
+                      {workloadType === "inference" ? (
+                        <label>
+                          Replicas
+                          <input name="replicas" type="number" min={1} defaultValue={2} />
+                        </label>
+                      ) : null}
+                      <label className="checkbox">
+                        <input name="spot_tolerant" type="checkbox" defaultChecked />
+                        Spot tolerant
+                      </label>
+                      <label className="checkbox">
+                        <input name="resumable" type="checkbox" />
+                        Resumable
+                      </label>
+                      <button className="button button--primary button--form" disabled={submitting} type="submit">
+                        {submitting ? "Submitting..." : "Submit workload"}
+                      </button>
+                    </form>
+                    {result && (
+                      <div className="inline-card">
+                        <div className="inline-card__title">
+                          <span>Last submission</span>
+                          <strong>{result.id}</strong>
+                        </div>
+                        <div className="inline-card__body">
+                          <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
+                          <span>{result.type}</span>
+                          <span>
+                            {result.gpu_type} x {result.gpu_count}
+                          </span>
+                          {result.type === "inference" && <span>{result.replicas ?? 1} replica(s)</span>}
+                          <span>{result.priority}</span>
+                          {result.resumable && <span>Resumable</span>}
+                          {result.placement?.node_id && <span>Placed on {result.placement.node_id}</span>}
+                          {result.replica_placements?.length ? (
+                            <span>{result.replica_placements.length} placement(s)</span>
                           ) : null}
                         </div>
-                      )}
-                    </div>
-                  )}
-                </section>
+                        {result.status_reason && <p className="muted">{result.status_reason}</p>}
+                        {result.scheduling_explanation && <p className="muted">{result.scheduling_explanation}</p>}
+                        {(result.preempt_notice_seconds || result.checkpoint_state || result.resume_eligible) && (
+                          <div className="event-meta">
+                            {result.preempt_notice_seconds ? (
+                              <span className="event-meta__item">notice: {result.preempt_notice_seconds}s</span>
+                            ) : null}
+                            {result.checkpoint_state ? (
+                              <span className="event-meta__item">checkpoint: {result.checkpoint_state}</span>
+                            ) : null}
+                            {result.resume_eligible ? (
+                              <span className="event-meta__item">resume eligible</span>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                )}
 
-                <section className="panel panel--span-5">
-                  <div className="panel__header">
-                    <div>
+                {userTab === "monitoring" && (
+                  <section className="panel">
+                    <div className="panel__header">
                       <h3>Workload Monitoring</h3>
-                      <p>Placement, queueing, and explanation details from the live backend.</p>
+                      <span className="panel__badge">{workloads.length} workloads</span>
                     </div>
-                    <span className="panel__badge">{workloads.length} workloads</span>
-                  </div>
-                  <div className="table-wrap">
-                    <table>
-                      <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Type</th>
-                        <th>GPU</th>
-                        <th>Count</th>
-                        <th>Replicas</th>
-                        <th>Priority</th>
-                        <th>State</th>
-                        <th>Placement / Reason</th>
-                      </tr>
-                      </thead>
-                      <tbody>
-                        {workloads.map((workload) => (
-                          <tr key={workload.id}>
-                            <td className="mono">{workload.id}</td>
-                            <td>{workload.type}</td>
-                            <td>{workload.gpu_type}</td>
-                            <td>{workload.gpu_count}</td>
-                            <td>{workload.type === "inference" ? `${workload.replicas ?? 1}x` : "—"}</td>
-                            <td>{workload.priority}</td>
-                            <td>
-                              <span className={`chip chip--${tone(workload.state)}`}>{workload.state}</span>
-                            </td>
-                            <td className="cell-stack cell-stack--compact" title={summarizeWorkloadReason(workload)}>
-                              <span className="mono">{summarizeWorkloadReason(workload)}</span>
-                              {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
-                                <div className="event-meta">
-                                  {workload.preempt_notice_seconds ? (
-                                    <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
-                                  ) : null}
-                                  {workload.checkpoint_state ? (
-                                    <span className="event-meta__item">{workload.checkpoint_state}</span>
-                                  ) : null}
-                                  {workload.resume_eligible ? (
-                                    <span className="event-meta__item">resume eligible</span>
-                                  ) : null}
-                                </div>
-                              )}
-                            </td>
+                    <div className="table-wrap">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>ID</th>
+                            <th>Type</th>
+                            <th>GPU</th>
+                            <th>Count</th>
+                            <th>Replicas</th>
+                            <th>Priority</th>
+                            <th>State</th>
+                            <th>Placement / Reason</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
+                        </thead>
+                        <tbody>
+                          {workloads.map((workload) => (
+                            <tr key={workload.id}>
+                              <td className="mono">{workload.id}</td>
+                              <td>{workload.type}</td>
+                              <td>{workload.gpu_type}</td>
+                              <td>{workload.gpu_count}</td>
+                              <td>{workload.type === "inference" ? `${workload.replicas ?? 1}x` : "—"}</td>
+                              <td>{workload.priority}</td>
+                              <td>
+                                <span className={`chip chip--${tone(workload.state)}`}>{workload.state}</span>
+                              </td>
+                              <td className="cell-stack cell-stack--compact" title={summarizeWorkloadReason(workload)}>
+                                <span className="mono">{summarizeWorkloadReason(workload)}</span>
+                                {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
+                                  <div className="event-meta">
+                                    {workload.preempt_notice_seconds ? (
+                                      <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
+                                    ) : null}
+                                    {workload.checkpoint_state ? (
+                                      <span className="event-meta__item">{workload.checkpoint_state}</span>
+                                    ) : null}
+                                    {workload.resume_eligible ? (
+                                      <span className="event-meta__item">resume eligible</span>
+                                    ) : null}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )}
               </div>
             )}
 
             {activeView === "admin-dashboard" && (
-              <>
-                <section className="stats-grid">
-                  <article className="stat-card">
-                    <span className="stat-card__label">Total GPUs</span>
-                    <strong>{summary ? summary.total_gpus : "—"}</strong>
-                    <span>Allocated {summary ? summary.allocated_gpus : "—"}</span>
-                  </article>
-                  <article className="stat-card">
-                    <span className="stat-card__label">Available GPUs</span>
-                    <strong>{summary ? summary.available_gpus : "—"}</strong>
-                    <span>
-                      {summary ? `${summary.utilization_percent.toFixed(1)}% utilization` : "Waiting for summary"}
-                    </span>
-                  </article>
-                  <article className="stat-card">
-                    <span className="stat-card__label">Pending</span>
-                    <strong>{workloadSummary.pending}</strong>
-                    <span>Queued work awaiting a fit</span>
-                  </article>
-                  <article className="stat-card">
-                    <span className="stat-card__label">Running</span>
-                    <strong>{workloadSummary.running}</strong>
-                    <span>Workloads currently placed</span>
-                  </article>
-                </section>
+              <div className="tab-view">
+                <div className="tab-bar" role="tablist" aria-label="Admin dashboard tabs">
+                  {dashboardTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`tab-pill ${dashboardTab === tab.id ? "tab-pill--active" : ""}`}
+                      onClick={() => setDashboardTab(tab.id)}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                  <div className="dashboard-actions">
+                    <button
+                      className="button button--secondary button--tiny"
+                      onClick={() => refreshAll().catch((err) => setError(formatError(err)))}
+                      disabled={loading}
+                      type="button"
+                    >
+                      {loading ? "Refreshing" : "Refresh"}
+                    </button>
+                    <button
+                      className="button button--secondary button--tiny"
+                      onClick={handleTick}
+                      disabled={tickLoading}
+                      type="button"
+                    >
+                      {tickLoading ? "Ticking" : "Scheduler tick"}
+                    </button>
+                  </div>
+                </div>
 
-                <div className="dashboard-grid">
-                  <section className="panel panel--span-7">
-                    <div className="panel__header">
+                {dashboardTab === "summary" && (
+                  <>
+                    <section className="simulation-panel" aria-label="Simulation scenarios">
+                      <div className="simulation-panel__header">
+                        <h3>Run simulations</h3>
+                        <span>Trigger a scenario and observe telemetry, fleet state, and events.</span>
+                      </div>
+                      <div className="simulation-strip">
+                        {simulationOptions.map((scenario) => (
+                          <button
+                            key={scenario.id}
+                            type="button"
+                            className="simulation-pill"
+                            onClick={() => handleSimulation(scenario.id)}
+                            disabled={simulationAction !== null}
+                          >
+                            <span>{scenario.signal}</span>
+                            <strong>{simulationAction === scenario.id ? "Running..." : scenario.label}</strong>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel__header">
+                        <h3>Telemetry</h3>
+                        <span className="panel__badge">{telemetry.length} points</span>
+                      </div>
+                      <div className="telemetry-grid">
+                        <TelemetryChart
+                          title="Utilization"
+                          subtitle={latestTelemetry ? `${latestTelemetry.utilization_percent.toFixed(1)}%` : "—"}
+                          series={[{ label: "utilization", color: "#1d4ed8", values: telemetryUtilizationSeries }]}
+                          timestamps={telemetryTimestamps}
+                          yLabel="percent"
+                        />
+                        <TelemetryChart
+                          title="GPU capacity"
+                          subtitle={latestTelemetry ? `${latestTelemetry.available_gpus} schedulable` : "—"}
+                          series={[
+                            { label: "available", color: "#15803d", values: telemetryAvailableSeries },
+                            { label: "allocated", color: "#b45309", values: telemetryAllocatedSeries },
+                            { label: "failed", color: "#b91c1c", values: telemetryFailedGPUSeries }
+                          ]}
+                          timestamps={telemetryTimestamps}
+                          yLabel="GPUs"
+                        />
+                        <TelemetryChart
+                          title="Node health"
+                          subtitle={latestTelemetry ? `${latestTelemetry.healthy_nodes} healthy` : "—"}
+                          series={[
+                            { label: "healthy", color: "#15803d", values: telemetryHealthySeries },
+                            { label: "recovering", color: "#b45309", values: telemetryRecoveringSeries },
+                            { label: "failed", color: "#b91c1c", values: telemetryFailedSeries }
+                          ]}
+                          timestamps={telemetryTimestamps}
+                          yLabel="nodes"
+                        />
+                        <TelemetryChart
+                          title="Workloads"
+                          subtitle={
+                            latestTelemetry
+                              ? `${latestTelemetry.running_workloads} running, ${latestTelemetry.pending_workloads} queued`
+                              : "—"
+                          }
+                          series={[
+                            { label: "running", color: "#15803d", values: telemetryRunningWorkloadSeries },
+                            { label: "queued", color: "#b45309", values: telemetryPendingWorkloadSeries },
+                            { label: "completed", color: "#1d4ed8", values: telemetryCompletedWorkloadSeries },
+                            { label: "suspended", color: "#b91c1c", values: telemetrySuspendedWorkloadSeries }
+                          ]}
+                          timestamps={telemetryTimestamps}
+                          yLabel="workloads"
+                        />
+                      </div>
+                    </section>
+
+                    <section className="metric-strip">
                       <div>
+                        <span>Total GPUs</span>
+                        <strong>{summary ? summary.total_gpus : "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Allocated</span>
+                        <strong>{summary ? summary.allocated_gpus : "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Available</span>
+                        <strong>{summary ? summary.available_gpus : "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Failed</span>
+                        <strong>{summary ? summary.failed_gpus ?? 0 : "—"}</strong>
+                      </div>
+                      <div>
+                        <span>Pending</span>
+                        <strong>{workloadSummary.pending}</strong>
+                      </div>
+                      <div>
+                        <span>Running</span>
+                        <strong>{workloadSummary.running}</strong>
+                      </div>
+                    </section>
+
+                    <section className="panel">
+                      <div className="panel__header">
                         <h3>Fleet Summary</h3>
-                        <p>Capacity, utilization, and node health in one view.</p>
                       </div>
-                    </div>
-                    {summary ? (
-                      <div className="fleet-summary">
-                        <div className="fleet-summary__row">
-                          <span>Utilization</span>
-                          <strong>{summary.utilization_percent.toFixed(1)}%</strong>
-                        </div>
-                        <div className="progress">
-                          <div
-                            className="progress__bar"
-                            style={{ width: `${Math.max(0, Math.min(100, summary.utilization_percent))}%` }}
-                          />
-                        </div>
-                        <dl className="fleet-summary__grid">
-                          <div>
-                            <dt>Total</dt>
-                            <dd>{summary.total_gpus}</dd>
-                          </div>
-                          <div>
-                            <dt>Allocated</dt>
-                            <dd>{summary.allocated_gpus}</dd>
-                          </div>
-                          <div>
-                            <dt>Available</dt>
-                            <dd>{summary.available_gpus}</dd>
-                          </div>
-                          <div>
-                            <dt>Healthy nodes</dt>
-                            <dd>{healthyNodes.length}</dd>
-                          </div>
-                        </dl>
-                        {summary.gpu_types && (
-                          <div className="mini-table">
-                            <div className="mini-table__head">
-                              <span>GPU</span>
-                              <span>Total</span>
-                              <span>Allocated</span>
+                      {summary ? (
+                        <div className="fleet-summary">
+                          <div className="node-metric-strip">
+                            <div>
+                              <span>Total nodes</span>
+                              <strong>{nodes.length}</strong>
                             </div>
-                            {Object.entries(summary.gpu_types).map(([gpuType, values]) => (
-                              <div key={gpuType} className="mini-table__row">
-                                <span>{gpuType}</span>
-                                <span>{values.total}</span>
-                                <span>{values.allocated}</span>
-                              </div>
-                            ))}
+                            <div className="node-metric node-metric--success">
+                              <span>Healthy</span>
+                              <strong>{healthyNodes.length}</strong>
+                            </div>
+                            <div className="node-metric node-metric--warning">
+                              <span>Recovering</span>
+                              <strong>{recoveringNodes.length}</strong>
+                            </div>
+                            <div className="node-metric node-metric--danger">
+                              <span>Failed</span>
+                              <strong>{failedNodes.length}</strong>
+                            </div>
                           </div>
-                        )}
+                          <div className="utilization-gauge">
+                            <div
+                              className="utilization-gauge__dial"
+                              style={
+                                {
+                                  "--gauge-value": `${Math.max(0, Math.min(100, summary.utilization_percent)) * 1.8}deg`
+                                } as CSSProperties
+                              }
+                            >
+                              <strong>{summary.utilization_percent.toFixed(1)}%</strong>
+                              <span>Utilization</span>
+                            </div>
+                          </div>
+                          {summary.gpu_types && (
+                            <div className="mini-table">
+                              <div className="mini-table__head">
+                                <span>GPU</span>
+                                <span>Total</span>
+                                <span>Allocated</span>
+                                <span>Schedulable</span>
+                                <span>Failed</span>
+                              </div>
+                              {Object.entries(summary.gpu_types).map(([gpuType, values]) => (
+                                <div key={gpuType} className="mini-table__row">
+                                  <span>{gpuType}</span>
+                                  <span>{values.total}</span>
+                                  <span>{values.allocated}</span>
+                                  <span>{values.available ?? 0}</span>
+                                  <span>{values.failed ?? 0}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="muted">Loading summary...</p>
+                      )}
+                      <div className="node-strip">
+                        {nodes.map((node) => (
+                          <button
+                            key={node.id}
+                            type="button"
+                            className={`node-pill ${selectedNodeId === node.id ? "node-pill--active" : ""}`}
+                            onClick={() => setSelectedNodeId(node.id)}
+                          >
+                            <strong>{node.id}</strong>
+                            <span>{node.gpu_type}</span>
+                            <span>{node.health}</span>
+                          </button>
+                        ))}
                       </div>
-                    ) : (
-                      <p className="muted">Loading summary...</p>
-                    )}
-                    <div className="node-strip">
-                      {nodes.map((node) => (
-                        <button
-                          key={node.id}
-                          type="button"
-                          className={`node-pill ${selectedNodeId === node.id ? "node-pill--active" : ""}`}
-                          onClick={() => setSelectedNodeId(node.id)}
-                        >
-                          <strong>{node.id}</strong>
-                          <span>{node.gpu_type}</span>
-                          <span>{node.health}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </section>
+                    </section>
+                  </>
+                )}
 
-                  <section className="panel panel--span-5">
+                {dashboardTab === "events" && (
+                  <section className="panel">
                     <div className="panel__header">
-                      <div>
-                        <h3>Event Log</h3>
-                        <p>Recent scheduling and admin events from the API.</p>
-                      </div>
+                      <h3>Event Log</h3>
                       <span className="panel__badge">{events.length} recent</span>
                     </div>
 
-                    <div className="event-list">
-                      {events.length === 0 ? (
-                        <p className="muted">No events loaded yet.</p>
-                      ) : (
-                        events.map((event) => (
-                          <article key={event.id} className="event-item">
-                            <div className="event-item__top">
-                              <span className={`chip chip--${eventTone(event.type)}`}>{event.type}</span>
-                              <span className="mono">{formatTimestamp(event.timestamp)}</span>
-                            </div>
-                            <div className="event-item__body">
-                              <strong>{event.message}</strong>
-                              <span>
-                                {event.actor}
-                                {event.node_id ? ` · node ${event.node_id}` : ""}
-                                {event.workload_id ? ` · workload ${event.workload_id}` : ""}
-                              </span>
-                              {event.metadata && Object.keys(event.metadata).length > 0 && (
-                                <div className="event-meta">
-                                  {Object.entries(event.metadata).map(([key, value]) => (
-                                    <span key={key} className="event-meta__item">
-                                      {key}: {value}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          </article>
-                        ))
-                      )}
+                    <div className="table-wrap">
+                      <table className="data-table event-table">
+                        <thead>
+                          <tr>
+                            <th>Time</th>
+                            <th>Type</th>
+                            <th>Message</th>
+                            <th>Actor</th>
+                            <th>Details</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {events.length === 0 ? (
+                            <tr>
+                              <td colSpan={5} className="table-empty">
+                                No events loaded yet.
+                              </td>
+                            </tr>
+                          ) : (
+                            events.map((event) => (
+                              <tr key={event.id}>
+                                <td className="mono">{formatTimestamp(event.timestamp)}</td>
+                                <td>
+                                  <span className={`chip chip--${eventTone(event.type)}`}>{formatEventType(event.type)}</span>
+                                </td>
+                                <td className="cell-stack cell-stack--compact" title={event.message}>
+                                  <span>{formatEventMessage(event)}</span>
+                                </td>
+                                <td className="mono">{event.actor}</td>
+                                <td>
+                                  {metadataEntries(event).length > 0 ? (
+                                    <details className="event-details">
+                                      <summary className="event-details__summary">
+                                        <span>Details</span>
+                                        <span className="event-details__chevron">▾</span>
+                                      </summary>
+                                      <div className="event-meta">
+                                        {metadataEntries(event).map(([key, value]) => (
+                                          <span key={key} className="event-meta__item">
+                                            {titleize(key)}: {value}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </details>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
                     </div>
                   </section>
-                </div>
-              </>
+                )}
+              </div>
             )}
 
             {activeView === "admin-ops" && (
               <div className="dashboard-grid dashboard-grid--ops">
                 <section className="panel panel--span-5">
                   <div className="panel__header">
-                    <div>
-                      <h3>Operational shortcuts</h3>
-                      <p>Reset demo data or advance the scheduler without leaving the page.</p>
-                    </div>
+                    <h3>Operational shortcuts</h3>
                   </div>
 
                   <div className="ops-stack">
@@ -898,17 +1286,11 @@ export function App() {
                     </div>
                   </div>
 
-                  <p className="muted">
-                    Use these controls to cycle the demo environment and observe how the scheduler responds.
-                  </p>
                 </section>
 
                 <section className="panel panel--span-7">
                   <div className="panel__header">
-                    <div>
-                      <h3>Node disruption controls</h3>
-                      <p>Choose a node, then apply failure, recovery, or spot preemption.</p>
-                    </div>
+                    <h3>Node disruption controls</h3>
                     <span className="panel__badge">{nodes.length} nodes</span>
                   </div>
 
@@ -941,9 +1323,7 @@ export function App() {
                           </span>
                         </div>
                       </div>
-                    ) : (
-                      <p className="muted">Select a node to see its current state.</p>
-                    )}
+                    ) : null}
 
                     <div className="action-grid">
                       <button
@@ -983,13 +1363,67 @@ export function App() {
                       </button>
                     </div>
 
-                    <p className="muted">
-                      Failed and preempted workloads are reflected after the automatic refresh.
-                    </p>
                   </div>
                 </section>
               </div>
             )}
+
+            {activeView === "system-design" && (
+              <section className="panel system-design">
+                <div className="panel__header">
+                  <h3>System design overview</h3>
+                </div>
+
+                <div className="system-design__grid">
+                  <article className="system-design__card">
+                    <h4>Core modules</h4>
+                    <ul>
+                      <li><strong>Gateway</strong>: validates requests and exposes REST APIs.</li>
+                      <li><strong>Control plane services</strong>: orchestrates submit, disruption, simulation, and query flows.</li>
+                      <li><strong>Scheduler</strong>: computes fit, class-aware ordering, and preemption decisions.</li>
+                      <li><strong>Reconciler</strong>: drives health transitions and retries pending scheduling.</li>
+                      <li><strong>Event recorder</strong>: emits explainable audit events for every major transition.</li>
+                      <li><strong>Telemetry history</strong>: captures snapshots for utilization, node health, and workload state trends.</li>
+                      <li><strong>Store</strong>: persists nodes, workloads, events, and telemetry in Postgres.</li>
+                    </ul>
+                  </article>
+
+                  <article className="system-design__card">
+                    <h4>Request flow</h4>
+                    <ol>
+                      <li>User or admin calls API through the gateway.</li>
+                      <li>Control plane validates policy and current fleet state.</li>
+                      <li>Scheduler decides place, queue, or preempt with reason codes.</li>
+                      <li>Store transaction applies state changes atomically.</li>
+                      <li>Event and telemetry entries are emitted for observability.</li>
+                      <li>Frontend refreshes summary, event log, and charts.</li>
+                    </ol>
+                  </article>
+
+                  <article className="system-design__card system-design__card--flow">
+                    <h4>Decision and reconciliation loop</h4>
+                    <div className="flow-row">
+                      <div className="flow-node">Submit / Disrupt / Simulate</div>
+                      <div className="flow-arrow">→</div>
+                      <div className="flow-node">Policy checks</div>
+                      <div className="flow-arrow">→</div>
+                      <div className="flow-node">Schedule or queue</div>
+                    </div>
+                    <div className="flow-row">
+                      <div className="flow-node">Persist + emit events</div>
+                      <div className="flow-arrow">→</div>
+                      <div className="flow-node">Telemetry snapshot</div>
+                      <div className="flow-arrow">→</div>
+                      <div className="flow-node">Dashboard update</div>
+                    </div>
+                    <div className="flow-note">
+                      Reconciler runs continuously to recover failed nodes, retry pending workloads, and keep control-plane state converged.
+                    </div>
+                  </article>
+                </div>
+              </section>
+            )}
+
           </section>
         </div>
       </div>

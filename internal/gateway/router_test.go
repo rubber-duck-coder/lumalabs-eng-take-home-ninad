@@ -75,6 +75,50 @@ func TestListSeededNodes(t *testing.T) {
 	}
 }
 
+func TestTelemetryEndpointReturnsSnapshots(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/telemetry?limit=5", nil)
+	rec := httptest.NewRecorder()
+
+	NewRouterWithStore(store.NewSeededMemoryStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var snapshots []map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&snapshots); err != nil {
+		t.Fatalf("decode telemetry: %v", err)
+	}
+	if len(snapshots) == 0 {
+		t.Fatal("expected telemetry snapshots")
+	}
+	if _, ok := snapshots[0]["utilization_percent"]; !ok {
+		t.Fatalf("expected utilization_percent in snapshot, got %+v", snapshots[0])
+	}
+}
+
+func TestRunSimulationEndpoint(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/admin/simulations/sudden-inference-spike", nil)
+	rec := httptest.NewRecorder()
+
+	NewRouterWithStore(store.NewSeededMemoryStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode simulation response: %v", err)
+	}
+	if payload["scenario"] != "sudden-inference-spike" {
+		t.Fatalf("expected scenario in response, got %+v", payload)
+	}
+	if _, ok := payload["workloads"].([]any); !ok {
+		t.Fatalf("expected workloads in response, got %+v", payload)
+	}
+}
+
 func TestSeedDemoDataEndpointPopulatesStore(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
 

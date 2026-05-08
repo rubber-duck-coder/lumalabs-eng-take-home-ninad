@@ -136,13 +136,14 @@ Acceptance:
 The current system now runs, schedules, persists state, and reacts to explicit node disruptions. The remaining gaps versus the original problem statement are:
 
 - The demo is not yet exercising the full set of behaviors through end-to-end scenarios and deployment docs.
+- The backend still needs a real telemetry history API to drive utilization, node health, and GPU availability trends in the frontend.
 - The backend can still grow stronger live rebalance actions if we decide the demo needs broader migration than the current same-priority batch reclaim path.
 - The frontend now has a left-side navigation split for user flow, admin dashboard, and admin ops, but the remaining UI work should stay focused on clarity rather than new surface area.
 
 Recommended follow-up sequence:
 
-1. Modularize the control plane into clearer internal responsibilities.
-2. Cover the implemented behaviors in E2E scenarios and submission docs.
+1. Cover the implemented behaviors in E2E scenarios and submission docs.
+2. Add telemetry history and a frontend timeseries dashboard for utilization, node health, and GPU availability.
 3. Decide whether the demo needs stronger live rebalance actions beyond same-priority batch reclaim.
 
 ## Scheduling Strategy
@@ -217,6 +218,22 @@ Target module boundaries:
 - `events`: append-only audit trail and event fanout.
 - `store`: persistence adapters and transactional state loading/saving.
 - Preemption contract lives across `workloads`, `fleet`, and `events`; checkpoint execution remains a workload-runtime concern outside the control plane.
+
+## Phase 7: UX And Operational Clarity
+
+Owner: frontend plus coordinator.
+
+Goal:
+- Keep a minimalist UI while making behavior explainable for operators and reviewers.
+
+Current progress:
+- User view and admin dashboard are separated with focused tabs.
+- Event log has metadata folding and tighter table density.
+- Admin simulations are one-click actions from the dashboard.
+- Fleet summary now includes failed GPU accounting.
+
+Next slice:
+- Add a dedicated architecture page in the UI to describe request flow, scheduling decisions, reconciliation, and persistence boundaries.
 
 Acceptance:
 - New behaviors can land without adding more policy to the gateway or persistence layer.

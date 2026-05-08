@@ -28,8 +28,8 @@ At every logical checkpoint, update:
 
 - Phase: Deployment readiness for a Google Cloud VM.
 - Last completed checkpoint: Phase 6 E2E coverage and stronger rebalance policy.
-- Active implementation: core behavior work is complete enough for deployment prep, including E2E coverage, replica-aware inference, checkpoint semantics, and conservative rebalance. VM-friendly same-origin API routing is now wired in the frontend and compose stack.
-- Next recommended task: complete Google Cloud VM deployment and verify the live URL with `BASE_URL=<deployed-url> make e2e`.
+- Active implementation: core behavior work is complete enough for deployment prep, including E2E coverage, replica-aware inference, checkpoint semantics, conservative rebalance, telemetry history, and dashboard UX cleanup.
+- Next recommended task: finalize deployment polish and live VM verification with `BASE_URL=<deployed-url> make e2e`.
 
 ## Decision Log Index
 
@@ -76,6 +76,9 @@ At every logical checkpoint, update:
 | T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |
 | T033 | 4 | Revise frontend navigation and dashboard IA | frontend | done | T016-T018 | Add left-side navigation for user view, admin dashboard, and admin ops while keeping the existing live API flows. |
 | T034 | 7 | Prepare Google Cloud VM deployment flow | infra | doing | T019-T025,T021 | Container image, VM startup, and live URL verification. |
+| T035 | 6 | Add control-plane telemetry history API | backend | done | T028-T030 | Capture snapshots from control-plane mutations and expose utilization, node health, and GPU availability history via `GET /telemetry`. |
+| T036 | 4 | Add telemetry timeseries dashboard | frontend | done | T035 | Utilization, GPU capacity, node health, and workload state telemetry charts are rendered from `GET /telemetry`. |
+| T037 | 7 | Add system design overview page | frontend + coordinator | done | T033,T035 | Added left-nav architecture entry and a pure HTML system design page covering request flow, scheduling, reconciliation, events, telemetry, and persistence. |
 
 ## Checkpoint Entries
 
@@ -749,6 +752,40 @@ Decisions:
 
 Resume note:
 - Move next into Google Cloud VM deployment config, startup, and live URL verification.
+
+### 020: Control-Plane Telemetry History
+
+Status: done
+
+Owner: backend coding agent
+
+Tasks:
+- Added a control-plane-owned telemetry snapshot history.
+- Exposed `GET /telemetry` for dashboard consumption.
+- Moved reconciliation to the control-plane boundary so telemetry and mutation remain aligned.
+
+Files:
+- `cmd/control-plane/main.go`
+- `internal/controlplane/service.go`
+- `internal/controlplane/service_test.go`
+- `internal/gateway/router.go`
+- `internal/gateway/router_test.go`
+- `internal/reconciler/manager.go`
+- `internal/reconciler/manager_test.go`
+- `internal/telemetry/telemetry.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
+
+Decisions:
+- Telemetry snapshots are recorded by the control plane after successful mutations.
+- The reconciler path no longer mutates the store directly in the runtime flow.
+- The telemetry API is bounded and read-only so the frontend can render trends without inventing its own history.
+
+Resume note:
+- Next, wire the frontend to `/telemetry` and render utilization, health, and availability trends.
 
 ## Template
 
