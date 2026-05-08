@@ -1,5 +1,31 @@
 # Luma Take-Home — Infrastructure Engineering
 
+## Reviewer Quick Start
+
+Run locally:
+
+```bash
+cp .env.example .env
+make compose-up
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+Verify:
+
+```bash
+make verify
+BASE_URL=http://localhost:5173 make e2e
+```
+
+Read the implementation summary and tradeoffs in [APPROACH.md](APPROACH.md). For the live VM path, see [docs/google-cloud-vm.md](docs/google-cloud-vm.md) or run `make gcp-vm-reviewer` with the GCP environment described below.
+
+---
+
 GPU compute is the backbone of modern AI companies. Training runs, inference serving, batch processing — they all compete for the same scarce, expensive hardware. The difference between a well-run GPU fleet and a poorly-run one is millions of dollars and weeks of wasted researcher time.
 
 The hardest part isn't getting one job running on one GPU. It's everything else: scheduling across heterogeneous hardware, surviving preemption, shifting capacity between training and inference as priorities change, and keeping utilization high while maintaining SLOs.
