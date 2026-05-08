@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,15 +57,16 @@ func TestLiveCoreFlow(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
+	apiBaseURL := apiBase(baseURL)
 
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/admin/demo/seed", map[string]any{}, nil)
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/admin/demo/seed", map[string]any{}, nil)
 	nodes := mustListNodes(t, client, baseURL)
 	if len(nodes) == 0 {
 		t.Fatal("expected seeded nodes")
 	}
 
 	var created workload
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/workloads", map[string]any{
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/workloads", map[string]any{
 		"type":             "inference",
 		"gpu_type":         "A100",
 		"gpu_count":        1,
@@ -85,19 +87,19 @@ func TestLiveCoreFlow(t *testing.T) {
 	}
 
 	var fetched workload
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/workloads/"+created.ID, nil, &fetched)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/workloads/"+created.ID, nil, &fetched)
 	if fetched.State != "running" || len(fetched.ReplicaPlacements) != 2 {
 		t.Fatalf("expected fetched running workload with replica placements, got %+v", fetched)
 	}
 
 	var summary map[string]any
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/fleet/summary", nil, &summary)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/fleet/summary", nil, &summary)
 	if got := intFromAny(summary["workloads_by_state"].(map[string]any)["running"]); got < 1 {
 		t.Fatalf("expected at least one running workload, got %+v", summary["workloads_by_state"])
 	}
 
 	var events []event
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/events", nil, &events)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/events", nil, &events)
 	if !hasEvent(events, "workload_submitted", created.ID, "") {
 		t.Fatalf("expected workload_submitted event for %s", created.ID)
 	}
@@ -113,7 +115,8 @@ func TestLiveDisruptionFlow(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/admin/demo/seed", map[string]any{}, nil)
+	apiBaseURL := apiBase(baseURL)
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/admin/demo/seed", map[string]any{}, nil)
 
 	nodes := mustListNodes(t, client, baseURL)
 	var target node
@@ -128,7 +131,7 @@ func TestLiveDisruptionFlow(t *testing.T) {
 	}
 
 	var before workload
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/workloads", map[string]any{
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/workloads", map[string]any{
 		"type":             "training",
 		"gpu_type":         target.GPUType,
 		"gpu_count":        1,
@@ -138,16 +141,16 @@ func TestLiveDisruptionFlow(t *testing.T) {
 	}, &before)
 
 	var disrupted map[string]any
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/admin/nodes/"+target.ID+"/fail", nil, &disrupted)
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/admin/nodes/"+target.ID+"/fail", nil, &disrupted)
 
 	var after workload
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/workloads/"+before.ID, nil, &after)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/workloads/"+before.ID, nil, &after)
 	if after.State != "running" && after.State != "pending" {
 		t.Fatalf("expected workload to remain visible after disruption, got %+v", after)
 	}
 
 	var events []event
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/events", nil, &events)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/events", nil, &events)
 	if !hasEvent(events, "node_failed", "", target.ID) {
 		t.Fatalf("expected node_failed event for %s", target.ID)
 	}
@@ -160,10 +163,11 @@ func TestLiveRebalanceFlow(t *testing.T) {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/admin/demo/seed", map[string]any{}, nil)
+	apiBaseURL := apiBase(baseURL)
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/admin/demo/seed", map[string]any{}, nil)
 
 	var batch workload
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/workloads", map[string]any{
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/workloads", map[string]any{
 		"type":             "batch",
 		"gpu_type":         "A100",
 		"gpu_count":        4,
@@ -176,7 +180,7 @@ func TestLiveRebalanceFlow(t *testing.T) {
 	}
 
 	var inference workload
-	mustDoJSON(t, client, http.MethodPost, baseURL+"/workloads", map[string]any{
+	mustDoJSON(t, client, http.MethodPost, apiBaseURL+"/workloads", map[string]any{
 		"type":             "inference",
 		"gpu_type":         "A100",
 		"gpu_count":        4,
@@ -193,7 +197,7 @@ func TestLiveRebalanceFlow(t *testing.T) {
 	}
 
 	var fetchedBatch workload
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/workloads/"+batch.ID, nil, &fetchedBatch)
+	mustDoJSON(t, client, http.MethodGet, apiBaseURL+"/workloads/"+batch.ID, nil, &fetchedBatch)
 	if fetchedBatch.State != "pending" {
 		t.Fatalf("expected batch workload to be requeued, got %+v", fetchedBatch)
 	}
@@ -205,8 +209,16 @@ func TestLiveRebalanceFlow(t *testing.T) {
 func mustListNodes(t *testing.T, client *http.Client, baseURL string) []node {
 	t.Helper()
 	var nodes []node
-	mustDoJSON(t, client, http.MethodGet, baseURL+"/nodes", nil, &nodes)
+	mustDoJSON(t, client, http.MethodGet, apiBase(baseURL)+"/nodes", nil, &nodes)
 	return nodes
+}
+
+func apiBase(baseURL string) string {
+	trimmed := strings.TrimRight(baseURL, "/")
+	if strings.HasSuffix(trimmed, "/api") {
+		return trimmed
+	}
+	return trimmed + "/api"
 }
 
 func mustDoJSON(t *testing.T, client *http.Client, method, url string, body any, out any) {
