@@ -19,6 +19,7 @@ type SubmitRequest struct {
 	DurationSeconds int
 	SpotTolerant    bool
 	Resumable       bool
+	Replicas        int
 }
 
 type Manager struct {
@@ -46,6 +47,7 @@ func (m *Manager) Submit(req SubmitRequest) (domain.Workload, error) {
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
 		Resumable:       req.Resumable,
+		Replicas:        normalizeReplicas(req.Type, req.Replicas),
 		State:           domain.WorkloadStatePending,
 		SubmittedAt:     now,
 		UpdatedAt:       now,
@@ -97,4 +99,14 @@ func (m *Manager) schedule(id string) domain.Workload {
 func (m *Manager) nextID(prefix string, now time.Time) string {
 	seq := m.seq.Add(1)
 	return prefix + "-" + strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.FormatUint(seq, 36)
+}
+
+func normalizeReplicas(workloadType domain.WorkloadType, replicas int) int {
+	if workloadType != domain.WorkloadTypeInference {
+		return 1
+	}
+	if replicas < 1 {
+		return 1
+	}
+	return replicas
 }

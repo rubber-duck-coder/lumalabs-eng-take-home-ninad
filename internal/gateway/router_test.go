@@ -200,6 +200,81 @@ func TestCreateWorkloadQueuesWhenCapacityUnavailable(t *testing.T) {
 	}
 }
 
+func TestCreateInferenceWorkloadWithReplicas(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	for _, id := range []string{"node-a", "node-b"} {
+		_, err := memoryStore.CreateNode(domain.Node{
+			ID:            id,
+			GPUType:       "A100",
+			TotalGPUs:     4,
+			AllocatedGPUs: 0,
+			Health:        domain.NodeHealthHealthy,
+			CapacityClass: domain.CapacityClassOnDemand,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create node %s: %v", id, err)
+		}
+	}
+
+	body := bytes.NewBufferString(`{
+		"type":"inference",
+		"gpu_type":"A100",
+		"gpu_count":1,
+		"priority":"normal",
+		"duration_seconds":300,
+		"spot_tolerant":false,
+		"replicas":2
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/workloads", body)
+	rec := httptest.NewRecorder()
+
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var workload domain.Workload
+	if err := json.NewDecoder(rec.Body).Decode(&workload); err != nil {
+		t.Fatalf("decode workload: %v", err)
+	}
+	if workload.State != domain.WorkloadStateRunning {
+		t.Fatalf("expected running inference workload, got %s", workload.State)
+	}
+	if workload.Replicas != 2 || len(workload.ReplicaPlacements) != 2 {
+		t.Fatalf("expected two replica placements, got %+v", workload)
+	}
+	if workload.ReplicaPlacements[0].NodeID == workload.ReplicaPlacements[1].NodeID {
+		t.Fatalf("expected placements on distinct nodes, got %+v", workload.ReplicaPlacements)
+	}
+}
+
+func TestCreateInferenceWorkloadRejectsNegativeReplicas(t *testing.T) {
+	body := bytes.NewBufferString(`{
+		"type":"inference",
+		"gpu_type":"A100",
+		"gpu_count":1,
+		"priority":"normal",
+		"duration_seconds":300,
+		"spot_tolerant":false,
+		"replicas":-1
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/workloads", body)
+	rec := httptest.NewRecorder()
+
+	NewRouterWithStore(store.NewSeededMemoryStore()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_replicas") {
+		t.Fatalf("expected invalid_replicas error, got %s", rec.Body.String())
+	}
+}
+
 func TestConcurrentWorkloadSubmissionsDoNotOverAllocate(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
 	now := fixedTestTime()

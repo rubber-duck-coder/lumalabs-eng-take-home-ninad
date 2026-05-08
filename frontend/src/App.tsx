@@ -7,6 +7,14 @@ type Workload = {
   gpu_count: number;
   priority: string;
   resumable?: boolean;
+  replicas?: number;
+  replica_placements?: Array<{
+    node_id: string;
+    region?: string;
+    data_center?: string;
+    zone?: string;
+    provider?: string;
+  }>;
   state: string;
   status_reason?: string;
   scheduling_explanation?: string;
@@ -58,6 +66,7 @@ type FleetSummary = {
 };
 
 type NodeAction = "fail" | "recover" | "preempt-spot";
+type ViewKey = "user-view" | "admin-dashboard" | "admin-ops";
 
 type DisruptionResult = {
   node?: Node;
@@ -126,6 +135,7 @@ export function App() {
   const [events, setEvents] = useState<Event[]>([]);
   const [result, setResult] = useState<Workload | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
+  const [workloadType, setWorkloadType] = useState<Workload["type"]>("training");
   const [error, setError] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -133,6 +143,7 @@ export function App() {
   const [adminAction, setAdminAction] = useState<NodeAction | null>(null);
   const [demoAction, setDemoAction] = useState<"seed" | "clear" | null>(null);
   const [tickLoading, setTickLoading] = useState(false);
+  const [activeView, setActiveView] = useState<ViewKey>("user-view");
 
   async function refreshAll() {
     setLoading(true);
@@ -183,6 +194,19 @@ export function App() {
     refreshAll().catch((err) => setError(formatError(err)));
   }, []);
 
+  useEffect(() => {
+    const syncFromHash = () => {
+      const hash = window.location.hash.replace("#", "") as ViewKey;
+      if (hash === "user-view" || hash === "admin-dashboard" || hash === "admin-ops") {
+        setActiveView(hash);
+      }
+    };
+
+    syncFromHash();
+    window.addEventListener("hashchange", syncFromHash);
+    return () => window.removeEventListener("hashchange", syncFromHash);
+  }, []);
+
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) || null,
     [nodes, selectedNodeId]
@@ -213,29 +237,63 @@ export function App() {
     [activeWorkloads.length, summary, workloads]
   );
 
-  const sidebarSections = [
+  const navigationGroups = [
     {
-      id: "user-view",
-      label: "User view",
-      description: "Submit workloads and watch them move through the live queue.",
-      items: [`${workloadSummary.total} workloads`, `${workloadSummary.active} active`]
-    },
-    {
-      id: "admin-dashboard",
-      label: "Admin dashboard",
-      description: "Track health, utilization, placement, and recent events.",
+      label: "Workspace",
       items: [
-        `${summary ? summary.utilization_percent.toFixed(1) : "—"}% utilization`,
-        `${healthyNodes.length} healthy nodes`
+        {
+          id: "user-view" as const,
+          label: "User view",
+          description: "Submit workloads and monitor placement without leaving the page.",
+          meta: [`${workloadSummary.total} workloads`, `${workloadSummary.active} active`]
+        },
+        {
+          id: "admin-dashboard" as const,
+          label: "Admin dashboard",
+          description: "Inspect health, utilization, and the latest system events.",
+          meta: [
+            `${summary ? summary.utilization_percent.toFixed(1) : "—"}% utilization`,
+            `${healthyNodes.length} healthy nodes`
+          ]
+        }
       ]
     },
     {
-      id: "admin-ops",
-      label: "Admin ops",
-      description: "Fail, recover, or preempt nodes against the local API.",
-      items: [`${failedNodes.length} failed`, `${recoveringNodes.length} recovering`]
+      label: "Operations",
+      items: [
+        {
+          id: "admin-ops" as const,
+          label: "Admin ops",
+          description: "Trigger node disruption, seed, clear, and scheduler actions.",
+          meta: [`${failedNodes.length} failed`, `${recoveringNodes.length} recovering`]
+        }
+      ]
     }
   ];
+
+  const viewMeta: Record<ViewKey, { eyebrow: string; title: string; description: string }> = {
+    "user-view": {
+      eyebrow: "Page 1",
+      title: "Submit workloads and monitor placement",
+      description: "Keep the submit path fast, visible, and tied to the live API."
+    },
+    "admin-dashboard": {
+      eyebrow: "Page 2",
+      title: "System health, metrics, and event history",
+      description: "Fast view of fleet health, utilization, and capacity mix."
+    },
+    "admin-ops": {
+      eyebrow: "Page 3",
+      title: "Node disruption controls",
+      description: "Choose a node, then apply failure, recovery, or spot preemption."
+    }
+  };
+
+  function openView(view: ViewKey) {
+    setActiveView(view);
+    window.history.replaceState(null, "", `#${view}`);
+    document.getElementById("page-content")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -244,13 +302,14 @@ export function App() {
     setSubmitting(true);
     const data = new FormData(event.currentTarget);
     const payload = {
-      type: String(data.get("type") ?? "training"),
+      type: workloadType,
       gpu_type: String(data.get("gpu_type") ?? "A100"),
       gpu_count: Number(data.get("gpu_count")),
       priority: String(data.get("priority") ?? "normal"),
       duration_seconds: Number(data.get("duration_seconds")),
       spot_tolerant: data.get("spot_tolerant") === "on",
-      resumable: data.get("resumable") === "on"
+      resumable: data.get("resumable") === "on",
+      replicas: workloadType === "inference" ? Number(data.get("replicas") ?? 1) : 1
     };
 
     try {
@@ -263,6 +322,7 @@ export function App() {
       setStatusMessage(`Submitted ${created.id} and refreshed the live fleet state.`);
       await refreshAll();
       event.currentTarget.reset();
+      setWorkloadType("training");
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -338,6 +398,8 @@ export function App() {
     }
   }
 
+  const activePage = viewMeta[activeView];
+
   return (
     <main className="page">
       <header className="hero">
@@ -346,25 +408,11 @@ export function App() {
           <div>
             <h1>Luma GPU Workload Console</h1>
             <p>
-              Submit workloads, inspect placement, and exercise the local fleet through explicit
-              disruption controls.
+              A page-like control plane UI for workload submission, fleet monitoring, and admin
+              operations.
             </p>
           </div>
           <div className="hero__actions">
-            <button
-              className="button button--secondary"
-              onClick={() => handleDemoAction("seed")}
-              disabled={demoAction !== null || loading}
-            >
-              {demoAction === "seed" ? "Seeding..." : "Seed demo data"}
-            </button>
-            <button
-              className="button button--secondary"
-              onClick={() => handleDemoAction("clear")}
-              disabled={demoAction !== null || loading}
-            >
-              {demoAction === "clear" ? "Clearing..." : "Clear data"}
-            </button>
             <button
               className="button button--secondary"
               onClick={() => refreshAll().catch((err) => setError(formatError(err)))}
@@ -396,25 +444,37 @@ export function App() {
           <div className="sidebar__panel">
             <span className="sidebar__eyebrow">Overview</span>
             <h2>Live fleet navigation</h2>
-            <p>Use the sections below to jump between the user flow, dashboards, and admin actions.</p>
+            <p>Choose a page to switch between user, dashboard, and operations views.</p>
           </div>
 
-          <nav className="sidebar__nav">
-            {sidebarSections.map((section) => (
-              <a key={section.id} className="sidebar-card" href={`#${section.id}`}>
-                <div className="sidebar-card__top">
-                  <strong>{section.label}</strong>
-                  <span>Jump</span>
-                </div>
-                <p>{section.description}</p>
-                <div className="sidebar-card__meta">
-                  {section.items.map((item) => (
-                    <span key={item} className="meta-pill">
-                      {item}
-                    </span>
+          <nav className="sidebar__nav" aria-label="Primary navigation">
+            {navigationGroups.map((group) => (
+              <div key={group.label} className="nav-group">
+                <span className="nav-group__label">{group.label}</span>
+                <div className="nav-group__items">
+                  {group.items.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`nav-item ${activeView === item.id ? "nav-item--active" : ""}`}
+                      onClick={() => openView(item.id)}
+                    >
+                      <div className="nav-item__top">
+                        <strong>{item.label}</strong>
+                        <span>{activeView === item.id ? "Open" : "View"}</span>
+                      </div>
+                      <p>{item.description}</p>
+                      <div className="nav-item__meta">
+                        {item.meta.map((meta) => (
+                          <span key={meta} className="meta-pill">
+                            {meta}
+                          </span>
+                        ))}
+                      </div>
+                    </button>
                   ))}
                 </div>
-              </a>
+              </div>
             ))}
           </nav>
 
@@ -441,413 +501,467 @@ export function App() {
           </div>
         </aside>
 
-        <div className="workspace__main">
-          <section id="user-view" className="content-section">
+        <div className="workspace__main" id="page-content">
+          <section className="content-section">
             <div className="content-section__header">
               <div>
-                <span className="content-section__eyebrow">User view</span>
-                <h2>Submit workloads and monitor placement</h2>
-                <p>Keep the submit path fast, visible, and tied to the live API.</p>
+                <span className="content-section__eyebrow">{activePage.eyebrow}</span>
+                <h2>{activePage.title}</h2>
+                <p>{activePage.description}</p>
+              </div>
+              <div className="content-section__switcher" role="tablist" aria-label="View switcher">
+                {Object.entries(viewMeta).map(([view, meta]) => (
+                  <button
+                    key={view}
+                    type="button"
+                    className={`switcher-pill ${activeView === view ? "switcher-pill--active" : ""}`}
+                    onClick={() => openView(view as ViewKey)}
+                  >
+                    {meta.eyebrow}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div className="dashboard-grid">
-              <section className="panel panel--span-7">
-                <div className="panel__header">
-                  <div>
-                    <h3>Submit Workload</h3>
-                    <p>Create a workload against the current fleet state.</p>
+            {activeView === "user-view" && (
+              <div className="dashboard-grid">
+                <section className="panel panel--span-7">
+                  <div className="panel__header">
+                    <div>
+                      <h3>Submit Workload</h3>
+                      <p>Create a workload against the current fleet state.</p>
+                    </div>
                   </div>
-                </div>
-                <form onSubmit={onSubmit} className="form-grid">
+                  <form onSubmit={onSubmit} className="form-grid">
                   <label>
                     Type
-                    <select name="type" defaultValue="training">
+                    <select name="type" value={workloadType} onChange={(event) => setWorkloadType(event.target.value as Workload["type"])}>
                       <option value="training">training</option>
                       <option value="inference">inference</option>
                       <option value="batch">batch</option>
                     </select>
                   </label>
-                  <label>
-                    GPU Type
-                    <select name="gpu_type" defaultValue="A100">
-                      <option value="H100">H100</option>
-                      <option value="A100">A100</option>
-                      <option value="L4">L4</option>
-                    </select>
-                  </label>
-                  <label>
-                    GPU Count
-                    <input name="gpu_count" type="number" min={1} defaultValue={1} required />
-                  </label>
-                  <label>
-                    Priority
-                    <select name="priority" defaultValue="normal">
-                      <option value="high">high</option>
-                      <option value="normal">normal</option>
-                      <option value="low">low</option>
-                    </select>
-                  </label>
+                    <label>
+                      GPU Type
+                      <select name="gpu_type" defaultValue="A100">
+                        <option value="H100">H100</option>
+                        <option value="A100">A100</option>
+                        <option value="L4">L4</option>
+                      </select>
+                    </label>
+                    <label>
+                      GPU Count
+                      <input name="gpu_count" type="number" min={1} defaultValue={1} required />
+                    </label>
+                    <label>
+                      Priority
+                      <select name="priority" defaultValue="normal">
+                        <option value="high">high</option>
+                        <option value="normal">normal</option>
+                        <option value="low">low</option>
+                      </select>
+                    </label>
                   <label>
                     Duration Seconds
                     <input name="duration_seconds" type="number" min={1} defaultValue={300} required />
                   </label>
+                  {workloadType === "inference" ? (
+                    <label>
+                      Replicas
+                      <input name="replicas" type="number" min={1} defaultValue={2} />
+                    </label>
+                  ) : null}
                   <label className="checkbox">
                     <input name="spot_tolerant" type="checkbox" defaultChecked />
                     Spot tolerant
-                  </label>
-                  <label className="checkbox">
-                    <input name="resumable" type="checkbox" />
-                    Resumable
-                  </label>
-                  <button className="button button--primary button--form" disabled={submitting} type="submit">
-                    {submitting ? "Submitting..." : "Submit workload"}
-                  </button>
-                </form>
-                {result && (
-                  <div className="inline-card">
-                    <div className="inline-card__title">
-                      <span>Last submission</span>
-                      <strong>{result.id}</strong>
-                    </div>
-                    <div className="inline-card__body">
-                      <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
-                      <span>{result.type}</span>
+                    </label>
+                    <label className="checkbox">
+                      <input name="resumable" type="checkbox" />
+                      Resumable
+                    </label>
+                    <button className="button button--primary button--form" disabled={submitting} type="submit">
+                      {submitting ? "Submitting..." : "Submit workload"}
+                    </button>
+                  </form>
+                  {result && (
+                    <div className="inline-card">
+                      <div className="inline-card__title">
+                        <span>Last submission</span>
+                        <strong>{result.id}</strong>
+                      </div>
+                      <div className="inline-card__body">
+                        <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
+                        <span>{result.type}</span>
                       <span>
                         {result.gpu_type} x {result.gpu_count}
                       </span>
+                      {result.type === "inference" && <span>{result.replicas ?? 1} replica(s)</span>}
                       <span>{result.priority}</span>
                       {result.resumable && <span>Resumable</span>}
                       {result.placement?.node_id && <span>Placed on {result.placement.node_id}</span>}
+                      {result.replica_placements?.length ? (
+                        <span>{result.replica_placements.length} placement(s)</span>
+                      ) : null}
                     </div>
-                    {result.status_reason && <p className="muted">{result.status_reason}</p>}
-                    {result.scheduling_explanation && <p className="muted">{result.scheduling_explanation}</p>}
-                    {(result.preempt_notice_seconds || result.checkpoint_state || result.resume_eligible) && (
-                      <div className="event-meta">
-                        {result.preempt_notice_seconds ? (
-                          <span className="event-meta__item">notice: {result.preempt_notice_seconds}s</span>
-                        ) : null}
-                        {result.checkpoint_state ? (
-                          <span className="event-meta__item">checkpoint: {result.checkpoint_state}</span>
-                        ) : null}
-                        {result.resume_eligible ? (
-                          <span className="event-meta__item">resume eligible</span>
-                        ) : null}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
+                      {result.status_reason && <p className="muted">{result.status_reason}</p>}
+                      {result.scheduling_explanation && <p className="muted">{result.scheduling_explanation}</p>}
+                      {(result.preempt_notice_seconds || result.checkpoint_state || result.resume_eligible) && (
+                        <div className="event-meta">
+                          {result.preempt_notice_seconds ? (
+                            <span className="event-meta__item">notice: {result.preempt_notice_seconds}s</span>
+                          ) : null}
+                          {result.checkpoint_state ? (
+                            <span className="event-meta__item">checkpoint: {result.checkpoint_state}</span>
+                          ) : null}
+                          {result.resume_eligible ? (
+                            <span className="event-meta__item">resume eligible</span>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
 
-              <section className="panel panel--span-5">
-                <div className="panel__header">
-                  <div>
-                    <h3>Workload Monitoring</h3>
-                    <p>Placement, queueing, and explanation details from the live backend.</p>
+                <section className="panel panel--span-5">
+                  <div className="panel__header">
+                    <div>
+                      <h3>Workload Monitoring</h3>
+                      <p>Placement, queueing, and explanation details from the live backend.</p>
+                    </div>
+                    <span className="panel__badge">{workloads.length} workloads</span>
                   </div>
-                  <span className="panel__badge">{workloads.length} workloads</span>
-                </div>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
                       <tr>
                         <th>ID</th>
                         <th>Type</th>
                         <th>GPU</th>
                         <th>Count</th>
+                        <th>Replicas</th>
                         <th>Priority</th>
                         <th>State</th>
                         <th>Placement / Reason</th>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {workloads.map((workload) => (
-                        <tr key={workload.id}>
-                          <td className="mono">{workload.id}</td>
-                          <td>{workload.type}</td>
-                          <td>{workload.gpu_type}</td>
+                      </thead>
+                      <tbody>
+                        {workloads.map((workload) => (
+                          <tr key={workload.id}>
+                            <td className="mono">{workload.id}</td>
+                            <td>{workload.type}</td>
+                            <td>{workload.gpu_type}</td>
                           <td>{workload.gpu_count}</td>
+                          <td>{workload.type === "inference" ? `${workload.replicas ?? 1}x` : "—"}</td>
                           <td>{workload.priority}</td>
                           <td>
                             <span className={`chip chip--${tone(workload.state)}`}>{workload.state}</span>
                           </td>
                           <td className="cell-stack">
-                            {workload.placement?.node_id ? (
-                              <span className="mono">{workload.placement.node_id}</span>
-                            ) : (
-                              <span className="muted">{workload.status_reason || "Queued"}</span>
-                            )}
+                              {workload.placement?.node_id ? (
+                                <span className="mono">{workload.placement.node_id}</span>
+                              ) : (
+                                <span className="muted">{workload.status_reason || "Queued"}</span>
+                              )}
                             {workload.scheduling_explanation && (
                               <span className="muted">{workload.scheduling_explanation}</span>
                             )}
+                            {workload.type === "inference" && (workload.replica_placements?.length ?? 0) > 1 && (
+                              <span className="muted">
+                                {workload.replica_placements?.length ?? workload.replicas ?? 1} replica placements
+                              </span>
+                            )}
                             {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
                               <div className="event-meta">
-                                {workload.preempt_notice_seconds ? (
-                                  <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
-                                ) : null}
-                                {workload.checkpoint_state ? (
-                                  <span className="event-meta__item">{workload.checkpoint_state}</span>
-                                ) : null}
-                                {workload.resume_eligible ? (
-                                  <span className="event-meta__item">resume eligible</span>
-                                ) : null}
-                              </div>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            </div>
-          </section>
-
-          <section id="admin-dashboard" className="content-section">
-            <div className="content-section__header">
-              <div>
-                <span className="content-section__eyebrow">Admin dashboard</span>
-                <h2>System health, metrics, and event history</h2>
-                <p>Fast view of fleet health, utilization, and capacity mix.</p>
-              </div>
-            </div>
-
-            <section className="stats-grid">
-              <article className="stat-card">
-                <span className="stat-card__label">Total GPUs</span>
-                <strong>{summary ? summary.total_gpus : "—"}</strong>
-                <span>Allocated {summary ? summary.allocated_gpus : "—"}</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-card__label">Available GPUs</span>
-                <strong>{summary ? summary.available_gpus : "—"}</strong>
-                <span>{summary ? `${summary.utilization_percent.toFixed(1)}% utilization` : "Waiting for summary"}</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-card__label">Pending</span>
-                <strong>{workloadSummary.pending}</strong>
-                <span>Queued work awaiting a fit</span>
-              </article>
-              <article className="stat-card">
-                <span className="stat-card__label">Running</span>
-                <strong>{workloadSummary.running}</strong>
-                <span>Workloads currently placed</span>
-              </article>
-            </section>
-
-            <div className="dashboard-grid">
-              <section className="panel panel--span-7">
-                <div className="panel__header">
-                  <div>
-                    <h3>Fleet Summary</h3>
-                    <p>Capacity, utilization, and node health in one view.</p>
-                  </div>
-                </div>
-                {summary ? (
-                  <div className="fleet-summary">
-                    <div className="fleet-summary__row">
-                      <span>Utilization</span>
-                      <strong>{summary.utilization_percent.toFixed(1)}%</strong>
-                    </div>
-                    <div className="progress">
-                      <div
-                        className="progress__bar"
-                        style={{ width: `${Math.max(0, Math.min(100, summary.utilization_percent))}%` }}
-                      />
-                    </div>
-                    <dl className="fleet-summary__grid">
-                      <div>
-                        <dt>Total</dt>
-                        <dd>{summary.total_gpus}</dd>
-                      </div>
-                      <div>
-                        <dt>Allocated</dt>
-                        <dd>{summary.allocated_gpus}</dd>
-                      </div>
-                      <div>
-                        <dt>Available</dt>
-                        <dd>{summary.available_gpus}</dd>
-                      </div>
-                      <div>
-                        <dt>Healthy nodes</dt>
-                        <dd>{healthyNodes.length}</dd>
-                      </div>
-                    </dl>
-                    {summary.gpu_types && (
-                      <div className="mini-table">
-                        <div className="mini-table__head">
-                          <span>GPU</span>
-                          <span>Total</span>
-                          <span>Allocated</span>
-                        </div>
-                        {Object.entries(summary.gpu_types).map(([gpuType, values]) => (
-                          <div key={gpuType} className="mini-table__row">
-                            <span>{gpuType}</span>
-                            <span>{values.total}</span>
-                            <span>{values.allocated}</span>
-                          </div>
+                                  {workload.preempt_notice_seconds ? (
+                                    <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
+                                  ) : null}
+                                  {workload.checkpoint_state ? (
+                                    <span className="event-meta__item">{workload.checkpoint_state}</span>
+                                  ) : null}
+                                  {workload.resume_eligible ? (
+                                    <span className="event-meta__item">resume eligible</span>
+                                  ) : null}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
                         ))}
-                      </div>
-                    )}
+                      </tbody>
+                    </table>
                   </div>
-                ) : (
-                  <p className="muted">Loading summary...</p>
-                )}
-                <div className="node-strip">
-                  {nodes.map((node) => (
-                    <button
-                      key={node.id}
-                      type="button"
-                      className={`node-pill ${selectedNodeId === node.id ? "node-pill--active" : ""}`}
-                      onClick={() => setSelectedNodeId(node.id)}
-                    >
-                      <strong>{node.id}</strong>
-                      <span>{node.gpu_type}</span>
-                      <span>{node.health}</span>
-                    </button>
-                  ))}
-                </div>
-              </section>
-
-              <section className="panel panel--span-5">
-                <div className="panel__header">
-                  <div>
-                    <h3>Event Log</h3>
-                    <p>Recent scheduling and admin events from the API.</p>
-                  </div>
-                  <span className="panel__badge">{events.length} recent</span>
-                </div>
-
-                <div className="event-list">
-                  {events.length === 0 ? (
-                    <p className="muted">No events loaded yet.</p>
-                  ) : (
-                    events.map((event) => (
-                      <article key={event.id} className="event-item">
-                        <div className="event-item__top">
-                          <span className={`chip chip--${eventTone(event.type)}`}>{event.type}</span>
-                          <span className="mono">{formatTimestamp(event.timestamp)}</span>
-                        </div>
-                        <div className="event-item__body">
-                          <strong>{event.message}</strong>
-                          <span>
-                            {event.actor}
-                            {event.node_id ? ` · node ${event.node_id}` : ""}
-                            {event.workload_id ? ` · workload ${event.workload_id}` : ""}
-                          </span>
-                          {event.metadata && Object.keys(event.metadata).length > 0 && (
-                            <div className="event-meta">
-                              {Object.entries(event.metadata).map(([key, value]) => (
-                                <span key={key} className="event-meta__item">
-                                  {key}: {value}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      </article>
-                    ))
-                  )}
-                </div>
-              </section>
-            </div>
-          </section>
-
-          <section id="admin-ops" className="content-section">
-            <div className="content-section__header">
-              <div>
-                <span className="content-section__eyebrow">Admin ops</span>
-                <h2>Node disruption controls</h2>
-                <p>Choose a node, then apply failure, recovery, or spot preemption.</p>
+                </section>
               </div>
-            </div>
+            )}
 
-            <div className="dashboard-grid">
-              <section className="panel panel--span-5">
-                <div className="panel__header">
-                  <div>
-                    <h3>Disruption Controls</h3>
-                    <p>Actions call the local API only and refresh the live view.</p>
-                  </div>
-                </div>
+            {activeView === "admin-dashboard" && (
+              <>
+                <section className="stats-grid">
+                  <article className="stat-card">
+                    <span className="stat-card__label">Total GPUs</span>
+                    <strong>{summary ? summary.total_gpus : "—"}</strong>
+                    <span>Allocated {summary ? summary.allocated_gpus : "—"}</span>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-card__label">Available GPUs</span>
+                    <strong>{summary ? summary.available_gpus : "—"}</strong>
+                    <span>
+                      {summary ? `${summary.utilization_percent.toFixed(1)}% utilization` : "Waiting for summary"}
+                    </span>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-card__label">Pending</span>
+                    <strong>{workloadSummary.pending}</strong>
+                    <span>Queued work awaiting a fit</span>
+                  </article>
+                  <article className="stat-card">
+                    <span className="stat-card__label">Running</span>
+                    <strong>{workloadSummary.running}</strong>
+                    <span>Workloads currently placed</span>
+                  </article>
+                </section>
 
-                <div className="control-stack">
-                  <label>
-                    Target node
-                    <select value={selectedNodeId} onChange={(event) => setSelectedNodeId(event.target.value)}>
-                      {nodes.length === 0 ? <option value="">No nodes loaded</option> : null}
-                      {nodes.map((node) => (
-                        <option key={node.id} value={node.id}>
-                          {node.id} · {node.gpu_type} · {node.health}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  {selectedNode ? (
-                    <div className="node-details">
+                <div className="dashboard-grid">
+                  <section className="panel panel--span-7">
+                    <div className="panel__header">
                       <div>
-                        <strong>{selectedNode.id}</strong>
-                        <span>
-                          {selectedNode.provider} · {selectedNode.region} · {selectedNode.zone}
-                        </span>
-                      </div>
-                      <div className="node-details__chips">
-                        <span className={`chip chip--${tone(selectedNode.health)}`}>{selectedNode.health}</span>
-                        <span className="chip chip--neutral">{selectedNode.capacity_class}</span>
-                        <span className="chip chip--neutral">
-                          {clampCount(selectedNode.allocated_gpus)}/{clampCount(selectedNode.total_gpus)} GPUs
-                        </span>
+                        <h3>Fleet Summary</h3>
+                        <p>Capacity, utilization, and node health in one view.</p>
                       </div>
                     </div>
-                  ) : (
-                    <p className="muted">Select a node to see its current state.</p>
-                  )}
+                    {summary ? (
+                      <div className="fleet-summary">
+                        <div className="fleet-summary__row">
+                          <span>Utilization</span>
+                          <strong>{summary.utilization_percent.toFixed(1)}%</strong>
+                        </div>
+                        <div className="progress">
+                          <div
+                            className="progress__bar"
+                            style={{ width: `${Math.max(0, Math.min(100, summary.utilization_percent))}%` }}
+                          />
+                        </div>
+                        <dl className="fleet-summary__grid">
+                          <div>
+                            <dt>Total</dt>
+                            <dd>{summary.total_gpus}</dd>
+                          </div>
+                          <div>
+                            <dt>Allocated</dt>
+                            <dd>{summary.allocated_gpus}</dd>
+                          </div>
+                          <div>
+                            <dt>Available</dt>
+                            <dd>{summary.available_gpus}</dd>
+                          </div>
+                          <div>
+                            <dt>Healthy nodes</dt>
+                            <dd>{healthyNodes.length}</dd>
+                          </div>
+                        </dl>
+                        {summary.gpu_types && (
+                          <div className="mini-table">
+                            <div className="mini-table__head">
+                              <span>GPU</span>
+                              <span>Total</span>
+                              <span>Allocated</span>
+                            </div>
+                            {Object.entries(summary.gpu_types).map(([gpuType, values]) => (
+                              <div key={gpuType} className="mini-table__row">
+                                <span>{gpuType}</span>
+                                <span>{values.total}</span>
+                                <span>{values.allocated}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="muted">Loading summary...</p>
+                    )}
+                    <div className="node-strip">
+                      {nodes.map((node) => (
+                        <button
+                          key={node.id}
+                          type="button"
+                          className={`node-pill ${selectedNodeId === node.id ? "node-pill--active" : ""}`}
+                          onClick={() => setSelectedNodeId(node.id)}
+                        >
+                          <strong>{node.id}</strong>
+                          <span>{node.gpu_type}</span>
+                          <span>{node.health}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
 
-                  <div className="action-grid">
+                  <section className="panel panel--span-5">
+                    <div className="panel__header">
+                      <div>
+                        <h3>Event Log</h3>
+                        <p>Recent scheduling and admin events from the API.</p>
+                      </div>
+                      <span className="panel__badge">{events.length} recent</span>
+                    </div>
+
+                    <div className="event-list">
+                      {events.length === 0 ? (
+                        <p className="muted">No events loaded yet.</p>
+                      ) : (
+                        events.map((event) => (
+                          <article key={event.id} className="event-item">
+                            <div className="event-item__top">
+                              <span className={`chip chip--${eventTone(event.type)}`}>{event.type}</span>
+                              <span className="mono">{formatTimestamp(event.timestamp)}</span>
+                            </div>
+                            <div className="event-item__body">
+                              <strong>{event.message}</strong>
+                              <span>
+                                {event.actor}
+                                {event.node_id ? ` · node ${event.node_id}` : ""}
+                                {event.workload_id ? ` · workload ${event.workload_id}` : ""}
+                              </span>
+                              {event.metadata && Object.keys(event.metadata).length > 0 && (
+                                <div className="event-meta">
+                                  {Object.entries(event.metadata).map(([key, value]) => (
+                                    <span key={key} className="event-meta__item">
+                                      {key}: {value}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </article>
+                        ))
+                      )}
+                    </div>
+                  </section>
+                </div>
+              </>
+            )}
+
+            {activeView === "admin-ops" && (
+              <div className="dashboard-grid">
+                <section className="panel panel--span-6">
+                  <div className="panel__header">
+                    <div>
+                      <h3>Operational shortcuts</h3>
+                      <p>Reset demo data or advance the scheduler without leaving the page.</p>
+                    </div>
+                  </div>
+
+                  <div className="action-grid action-grid--stacked">
                     <button
-                      className="button button--danger"
-                      onClick={() => handleNodeAction("fail")}
-                      disabled={!selectedNodeId || adminAction !== null || !canFailNode}
-                      type="button"
-                      title={selectedNode?.health === "failed" ? "This node is already failed." : undefined}
+                      className="button button--secondary"
+                      onClick={() => handleDemoAction("seed")}
+                      disabled={demoAction !== null || loading}
                     >
-                      {adminAction === "fail" ? "Failing..." : "Fail node"}
+                      {demoAction === "seed" ? "Seeding..." : "Seed demo data"}
                     </button>
                     <button
                       className="button button--secondary"
-                      onClick={() => handleNodeAction("recover")}
-                      disabled={!selectedNodeId || adminAction !== null || !canRecoverNode}
-                      type="button"
-                      title={
-                        selectedNode && selectedNode.health !== "failed"
-                          ? "Recover only applies to failed nodes."
-                          : undefined
-                      }
+                      onClick={() => handleDemoAction("clear")}
+                      disabled={demoAction !== null || loading}
                     >
-                      {adminAction === "recover" ? "Recovering..." : "Recover node"}
+                      {demoAction === "clear" ? "Clearing..." : "Clear data"}
                     </button>
-                    <button
-                      className="button button--secondary"
-                      onClick={() => handleNodeAction("preempt-spot")}
-                      disabled={!selectedNodeId || adminAction !== null || !canPreemptNode}
-                      type="button"
-                      title={
-                        selectedNode && selectedNode.capacity_class !== "spot"
-                          ? "Preemption only applies to spot nodes."
-                          : undefined
-                      }
-                    >
-                      {adminAction === "preempt-spot" ? "Preempting..." : "Preempt spot"}
+                    <button className="button button--secondary" onClick={handleTick} disabled={tickLoading}>
+                      {tickLoading ? "Ticking..." : "Run scheduler tick"}
                     </button>
                   </div>
 
                   <p className="muted">
-                    Failed and preempted workloads are reflected after the automatic refresh.
+                    Use seed and clear to reset the demo fleet, then run the scheduler tick to observe
+                    placement decisions.
                   </p>
-                </div>
-              </section>
-            </div>
+                </section>
+
+                <section className="panel panel--span-6">
+                  <div className="panel__header">
+                    <div>
+                      <h3>Node disruption controls</h3>
+                      <p>Choose a node, then apply failure, recovery, or spot preemption.</p>
+                    </div>
+                    <span className="panel__badge">{nodes.length} nodes</span>
+                  </div>
+
+                  <div className="control-stack">
+                    <label>
+                      Target node
+                      <select value={selectedNodeId} onChange={(event) => setSelectedNodeId(event.target.value)}>
+                        {nodes.length === 0 ? <option value="">No nodes loaded</option> : null}
+                        {nodes.map((node) => (
+                          <option key={node.id} value={node.id}>
+                            {node.id} · {node.gpu_type} · {node.health}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {selectedNode ? (
+                      <div className="node-details">
+                        <div>
+                          <strong>{selectedNode.id}</strong>
+                          <span>
+                            {selectedNode.provider} · {selectedNode.region} · {selectedNode.zone}
+                          </span>
+                        </div>
+                        <div className="node-details__chips">
+                          <span className={`chip chip--${tone(selectedNode.health)}`}>{selectedNode.health}</span>
+                          <span className="chip chip--neutral">{selectedNode.capacity_class}</span>
+                          <span className="chip chip--neutral">
+                            {clampCount(selectedNode.allocated_gpus)}/{clampCount(selectedNode.total_gpus)} GPUs
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="muted">Select a node to see its current state.</p>
+                    )}
+
+                    <div className="action-grid">
+                      <button
+                        className="button button--danger"
+                        onClick={() => handleNodeAction("fail")}
+                        disabled={!selectedNodeId || adminAction !== null || !canFailNode}
+                        type="button"
+                        title={selectedNode?.health === "failed" ? "This node is already failed." : undefined}
+                      >
+                        {adminAction === "fail" ? "Failing..." : "Fail node"}
+                      </button>
+                      <button
+                        className="button button--secondary"
+                        onClick={() => handleNodeAction("recover")}
+                        disabled={!selectedNodeId || adminAction !== null || !canRecoverNode}
+                        type="button"
+                        title={
+                          selectedNode && selectedNode.health !== "failed"
+                            ? "Recover only applies to failed nodes."
+                            : undefined
+                        }
+                      >
+                        {adminAction === "recover" ? "Recovering..." : "Recover node"}
+                      </button>
+                      <button
+                        className="button button--secondary"
+                        onClick={() => handleNodeAction("preempt-spot")}
+                        disabled={!selectedNodeId || adminAction !== null || !canPreemptNode}
+                        type="button"
+                        title={
+                          selectedNode && selectedNode.capacity_class !== "spot"
+                            ? "Preemption only applies to spot nodes."
+                            : undefined
+                        }
+                      >
+                        {adminAction === "preempt-spot" ? "Preempting..." : "Preempt spot"}
+                      </button>
+                    </div>
+
+                    <p className="muted">
+                      Failed and preempted workloads are reflected after the automatic refresh.
+                    </p>
+                  </div>
+                </section>
+              </div>
+            )}
           </section>
         </div>
       </div>

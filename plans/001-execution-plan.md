@@ -135,7 +135,6 @@ Acceptance:
 
 The current system now runs, schedules, persists state, and reacts to explicit node disruptions. The remaining gaps versus the original problem statement are:
 
-- Inference workloads are still modeled as single workloads, not horizontally scaled services or replica sets.
 - There is no explicit priority-preemption policy that reclaims capacity for a higher-priority workload before placement fails.
 - Node health changes are driven by manual admin actions only; there is no reconciliation loop or simulated health feed that changes fleet state over time.
 - Demand-shift handling is still basic; the control plane does not rebalance placement across GPU types, capacity classes, zones, or providers as workload mix changes.
@@ -145,11 +144,10 @@ The current system now runs, schedules, persists state, and reacts to explicit n
 Recommended follow-up sequence:
 
 1. Modularize the control plane into clearer internal responsibilities.
-2. Model inference scale-out and replica-aware placement.
-3. Add explicit priority preemption / capacity reclamation plus drain/checkpoint metadata.
-4. Add a reconciliation or simulation loop for node health changes.
-5. Add rebalance logic for demand shifts across the heterogeneous fleet.
-6. Cover the above in E2E scenarios and submission docs.
+2. Add explicit priority preemption / capacity reclamation plus drain/checkpoint metadata.
+3. Add a reconciliation or simulation loop for node health changes.
+4. Add rebalance logic for demand shifts across the heterogeneous fleet.
+5. Cover the above in E2E scenarios and submission docs.
 
 ## Scheduling Strategy
 
@@ -193,6 +191,7 @@ Current implementation:
 - Training keeps packing tight on eligible on-demand nodes.
 - Inference prefers less-utilized eligible on-demand capacity.
 - Batch prefers spot when tolerated and otherwise packs tightly on on-demand nodes.
+- Inference workloads now support replica-aware scale-out placement across distinct eligible nodes.
 - Priority preemption is now active in the store layer for higher-priority workloads when a fit exists only after eviction of lower-priority work.
 
 ## Phase 6: Control-Plane Modularization

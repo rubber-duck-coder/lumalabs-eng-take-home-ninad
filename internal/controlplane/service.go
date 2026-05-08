@@ -23,6 +23,7 @@ type SubmitWorkloadRequest struct {
 	DurationSeconds int
 	SpotTolerant    bool
 	Resumable       bool
+	Replicas        int
 }
 
 type FleetSummary = fleet.Summary
@@ -43,6 +44,7 @@ func (s *Service) SubmitWorkload(req SubmitWorkloadRequest) (domain.Workload, er
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
 		Resumable:       req.Resumable,
+		Replicas:        req.Replicas,
 	})
 }
 

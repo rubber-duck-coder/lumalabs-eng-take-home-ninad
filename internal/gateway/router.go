@@ -94,6 +94,7 @@ type createWorkloadRequest struct {
 	DurationSeconds int                     `json:"duration_seconds"`
 	SpotTolerant    bool                    `json:"spot_tolerant"`
 	Resumable       bool                    `json:"resumable"`
+	Replicas        int                     `json:"replicas"`
 }
 
 func (app *App) createWorkload(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +116,7 @@ func (app *App) createWorkload(w http.ResponseWriter, r *http.Request) {
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
 		Resumable:       req.Resumable,
+		Replicas:        req.Replicas,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create_workload_failed")
@@ -252,6 +254,9 @@ func validateWorkloadRequest(req createWorkloadRequest) error {
 	}
 	if req.DurationSeconds <= 0 {
 		return fmt.Errorf("invalid_duration")
+	}
+	if req.Type == domain.WorkloadTypeInference && req.Replicas < 0 {
+		return fmt.Errorf("invalid_replicas")
 	}
 	return nil
 }

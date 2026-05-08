@@ -239,6 +239,70 @@ func TestScheduleWorkloadAllocatesAtomically(t *testing.T) {
 	}
 }
 
+func TestInferenceWorkloadSchedulesAcrossDistinctNodes(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		_, err := store.CreateNode(domain.Node{
+			ID:            id,
+			GPUType:       "A100",
+			TotalGPUs:     2,
+			AllocatedGPUs: 0,
+			Health:        domain.NodeHealthHealthy,
+			CapacityClass: domain.CapacityClassOnDemand,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create node %s: %v", id, err)
+		}
+	}
+
+	_, err := store.CreateWorkload(domain.Workload{
+		ID:          "svc-1",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    1,
+		Priority:    domain.WorkloadPriorityNormal,
+		Replicas:    3,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+
+	result, err := store.ScheduleWorkload("svc-1", now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+	if result.Decision.Outcome != scheduler.OutcomePlaced {
+		t.Fatalf("expected placed outcome, got %+v", result.Decision)
+	}
+	if result.Workload.State != domain.WorkloadStateRunning {
+		t.Fatalf("expected running workload, got %+v", result.Workload)
+	}
+	if len(result.Workload.ReplicaPlacements) != 3 {
+		t.Fatalf("expected 3 replica placements, got %+v", result.Workload.ReplicaPlacements)
+	}
+
+	nodesByID := make(map[string]struct{})
+	for _, placement := range result.Workload.ReplicaPlacements {
+		nodesByID[placement.NodeID] = struct{}{}
+	}
+	if len(nodesByID) != 3 {
+		t.Fatalf("expected placements across 3 distinct nodes, got %+v", result.Workload.ReplicaPlacements)
+	}
+	if result.Workload.Placement == nil {
+		t.Fatal("expected canonical placement")
+	}
+	if len(result.Workload.ReplicaPlacements) != result.Workload.Replicas {
+		t.Fatalf("expected replicas and placements to match, got replicas=%d placements=%d", result.Workload.Replicas, len(result.Workload.ReplicaPlacements))
+	}
+}
+
 func TestSchedulePendingWorkloadsOrdersByPriorityThenSubmission(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
@@ -503,6 +567,153 @@ func TestPreemptSpotNodePreemptsRunningWorkloads(t *testing.T) {
 	}
 }
 
+func TestFailNodePreservesRemainingInferenceReplicas(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, id := range []string{"node-a", "node-b"} {
+		_, err := store.CreateNode(domain.Node{
+			ID:            id,
+			GPUType:       "A100",
+			TotalGPUs:     1,
+			AllocatedGPUs: 0,
+			Health:        domain.NodeHealthHealthy,
+			CapacityClass: domain.CapacityClassOnDemand,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create node %s: %v", id, err)
+		}
+	}
+
+	_, err := store.CreateWorkload(domain.Workload{
+		ID:          "svc-fail",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    1,
+		Priority:    domain.WorkloadPriorityNormal,
+		Replicas:    2,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+	if _, err := store.ScheduleWorkload("svc-fail", now.Add(time.Second)); err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+
+	result, err := store.FailNode("node-a", now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("fail node: %v", err)
+	}
+	if result.Node.Health != domain.NodeHealthFailed {
+		t.Fatalf("expected failed node, got %+v", result.Node)
+	}
+	if len(result.Scheduled) != 0 {
+		t.Fatalf("expected no reschedule when one replica remains, got %+v", result.Scheduled)
+	}
+
+	workload, ok := store.GetWorkload("svc-fail")
+	if !ok {
+		t.Fatal("expected workload")
+	}
+	if workload.State != domain.WorkloadStateRunning {
+		t.Fatalf("expected workload to remain running, got %+v", workload)
+	}
+	if len(workload.ReplicaPlacements) != 1 {
+		t.Fatalf("expected one remaining replica placement, got %+v", workload.ReplicaPlacements)
+	}
+	if workload.ReplicaPlacements[0].NodeID != "node-b" {
+		t.Fatalf("expected surviving replica on node-b, got %+v", workload.ReplicaPlacements)
+	}
+}
+
+func TestScheduleWorkloadPreemptsInferenceReplicaAndKeepsServiceRunning(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, id := range []string{"node-a", "node-b"} {
+		_, err := store.CreateNode(domain.Node{
+			ID:            id,
+			GPUType:       "A100",
+			TotalGPUs:     2,
+			AllocatedGPUs: 0,
+			Health:        domain.NodeHealthHealthy,
+			CapacityClass: domain.CapacityClassOnDemand,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create node %s: %v", id, err)
+		}
+	}
+
+	_, err := store.CreateWorkload(domain.Workload{
+		ID:          "svc-preempt",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    1,
+		Priority:    domain.WorkloadPriorityLow,
+		Replicas:    2,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+	if _, err := store.ScheduleWorkload("svc-preempt", now.Add(time.Second)); err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+
+	_, err = store.CreateWorkload(domain.Workload{
+		ID:          "high-1",
+		Type:        domain.WorkloadTypeTraining,
+		GPUType:     "A100",
+		GPUCount:    2,
+		Priority:    domain.WorkloadPriorityHigh,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now.Add(2 * time.Minute),
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create high priority workload: %v", err)
+	}
+
+	result, err := store.ScheduleWorkload("high-1", now.Add(3*time.Minute))
+	if err != nil {
+		t.Fatalf("schedule high priority workload: %v", err)
+	}
+	if result.Decision.Outcome != scheduler.OutcomePlaced {
+		t.Fatalf("expected placed outcome, got %+v", result.Decision)
+	}
+
+	inference, ok := store.GetWorkload("svc-preempt")
+	if !ok {
+		t.Fatal("expected inference workload")
+	}
+	if inference.State != domain.WorkloadStateRunning {
+		t.Fatalf("expected inference service to remain running, got %+v", inference)
+	}
+	if len(inference.ReplicaPlacements) != 1 {
+		t.Fatalf("expected one surviving replica placement, got %+v", inference.ReplicaPlacements)
+	}
+	if inference.ReplicaPlacements[0].NodeID != "node-b" {
+		t.Fatalf("expected surviving replica on node-b, got %+v", inference.ReplicaPlacements)
+	}
+
+	high, ok := store.GetWorkload("high-1")
+	if !ok {
+		t.Fatal("expected high priority workload")
+	}
+	if high.State != domain.WorkloadStateRunning || high.Placement == nil || high.Placement.NodeID != "node-a" {
+		t.Fatalf("expected high priority workload on node-a, got %+v", high)
+	}
+}
+
 func TestScheduleWorkloadPreemptsLowerPriorityRunningWorkload(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
@@ -653,5 +864,119 @@ func TestScheduleWorkloadDoesNotPreemptEqualPriorityRunningWorkload(t *testing.T
 	pending, _ := store.GetWorkload("normal-2")
 	if pending.State != domain.WorkloadStatePending || pending.Placement != nil {
 		t.Fatalf("expected pending workload to stay queued, got %+v", pending)
+	}
+}
+
+func TestScheduleInferenceWorkloadUsesDistinctReplicaPlacements(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	for _, id := range []string{"node-a", "node-b"} {
+		_, err := store.CreateNode(domain.Node{
+			ID:            id,
+			GPUType:       "A100",
+			TotalGPUs:     4,
+			AllocatedGPUs: 0,
+			Health:        domain.NodeHealthHealthy,
+			CapacityClass: domain.CapacityClassOnDemand,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+		if err != nil {
+			t.Fatalf("create node %s: %v", id, err)
+		}
+	}
+
+	_, err := store.CreateWorkload(domain.Workload{
+		ID:          "inference-svc",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    1,
+		Priority:    domain.WorkloadPriorityNormal,
+		Replicas:    2,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+
+	result, err := store.ScheduleWorkload("inference-svc", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+	if result.Decision.Outcome != scheduler.OutcomePlaced {
+		t.Fatalf("expected placed outcome, got %+v", result.Decision)
+	}
+	if got := len(result.Workload.ReplicaPlacements); got != 2 {
+		t.Fatalf("expected 2 replica placements, got %d", got)
+	}
+	if result.Workload.ReplicaPlacements[0].NodeID == result.Workload.ReplicaPlacements[1].NodeID {
+		t.Fatalf("expected replica placements on distinct nodes, got %+v", result.Workload.ReplicaPlacements)
+	}
+
+	first, _ := store.GetNode("node-a")
+	second, _ := store.GetNode("node-b")
+	if first.AllocatedGPUs != 1 || second.AllocatedGPUs != 1 {
+		t.Fatalf("expected one gpu allocated on each node, got first=%+v second=%+v", first, second)
+	}
+
+	workload, ok := store.GetWorkload("inference-svc")
+	if !ok {
+		t.Fatal("expected inference workload")
+	}
+	if workload.State != domain.WorkloadStateRunning || len(workload.ReplicaPlacements) != 2 {
+		t.Fatalf("expected running workload with replica placements, got %+v", workload)
+	}
+}
+
+func TestScheduleInferenceWorkloadQueuesWhenNotEnoughDistinctNodes(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, err := store.CreateNode(domain.Node{
+		ID:            "node-a",
+		GPUType:       "A100",
+		TotalGPUs:     4,
+		AllocatedGPUs: 0,
+		Health:        domain.NodeHealthHealthy,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	_, err = store.CreateWorkload(domain.Workload{
+		ID:          "inference-svc",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    1,
+		Priority:    domain.WorkloadPriorityNormal,
+		Replicas:    2,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+
+	result, err := store.ScheduleWorkload("inference-svc", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+	if result.Decision.Outcome != scheduler.OutcomeQueued {
+		t.Fatalf("expected queued outcome, got %+v", result.Decision)
+	}
+
+	workload, ok := store.GetWorkload("inference-svc")
+	if !ok {
+		t.Fatal("expected inference workload")
+	}
+	if workload.State != domain.WorkloadStatePending || len(workload.ReplicaPlacements) != 0 {
+		t.Fatalf("expected queued workload without partial placements, got %+v", workload)
 	}
 }

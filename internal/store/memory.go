@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -401,13 +402,37 @@ func (s *MemoryStore) PreemptSpotNode(id string, now time.Time) (DisruptionResul
 }
 
 func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (SchedulingResult, error) {
-
 	workload, exists := s.workloads[id]
 	if !exists {
 		return SchedulingResult{}, ErrNotFound
 	}
 	if workload.State != domain.WorkloadStatePending {
 		return SchedulingResult{Workload: cloneWorkload(workload)}, nil
+	}
+
+	if workload.Type == domain.WorkloadTypeInference {
+		if result, ok, err := s.scheduleInferenceWorkloadLocked(workload, now); err != nil {
+			return SchedulingResult{}, err
+		} else if ok {
+			return result, nil
+		}
+
+		queued := cloneWorkload(workload)
+		queued.Replicas = normalizeInferenceReplicas(workload.Replicas)
+		queued.State = domain.WorkloadStatePending
+		queued.Placement = nil
+		queued.ReplicaPlacements = nil
+		queued.UpdatedAt = now
+		queued.StatusReason = inferenceQueueReason(workload)
+		queued.SchedulingExplanation = queued.StatusReason
+		s.workloads[id] = cloneWorkload(queued)
+		return SchedulingResult{
+			Workload: cloneWorkload(queued),
+			Decision: scheduler.Decision{
+				Outcome: scheduler.OutcomeQueued,
+				Reason:  queued.StatusReason,
+			},
+		}, nil
 	}
 
 	decision := scheduler.Decide(toSchedulerWorkload(workload), toSchedulerNodesLocked(s.nodes))
@@ -459,6 +484,72 @@ func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (Scheduli
 	s.nodes[node.ID] = cloneNode(node)
 	s.workloads[id] = cloneWorkload(updated)
 	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, nil
+}
+
+func (s *MemoryStore) scheduleInferenceWorkloadLocked(workload domain.Workload, now time.Time) (SchedulingResult, bool, error) {
+	replicas := normalizeInferenceReplicas(workload.Replicas)
+	tempNodes := cloneNodeMap(s.nodes)
+	placements := make([]domain.Placement, 0, replicas)
+	decisions := make([]scheduler.Decision, 0, replicas)
+	usedNodes := make(map[string]struct{}, replicas)
+
+	for replicaIndex := 0; replicaIndex < replicas; replicaIndex++ {
+		decision := scheduler.Decide(toSchedulerWorkload(workload), toSchedulerNodesLockedExcluding(tempNodes, usedNodes))
+		if decision.Outcome != scheduler.OutcomePlaced || decision.SelectedNode == nil {
+			return SchedulingResult{
+				Workload: cloneWorkload(workload),
+				Decision: scheduler.Decision{
+					Outcome: scheduler.OutcomeQueued,
+					Reason:  inferenceQueueReasonForPartial(workload, replicaIndex, replicas, decision.Reason),
+					RejectedNodes: decision.RejectedNodes,
+				},
+			}, false, nil
+		}
+
+		node := tempNodes[decision.SelectedNode.ID]
+		if node.FreeGPUs() < workload.GPUCount {
+			return SchedulingResult{
+				Workload: cloneWorkload(workload),
+				Decision: scheduler.Decision{
+					Outcome: scheduler.OutcomeQueued,
+					Reason:  inferenceQueueReasonForPartial(workload, replicaIndex, replicas, "insufficient capacity after tentative placement"),
+				},
+			}, false, nil
+		}
+
+		node.AllocatedGPUs += workload.GPUCount
+		if node.AllocatedGPUs > node.TotalGPUs {
+			return SchedulingResult{}, false, fmt.Errorf("%w: node over allocation", ErrConflict)
+		}
+		node.RunningWorkloadIDs = appendUniqueWorkloadID(node.RunningWorkloadIDs, workload.ID)
+		node.UpdatedAt = now
+		tempNodes[node.ID] = cloneNode(node)
+		usedNodes[node.ID] = struct{}{}
+		placements = append(placements, placementFromNode(node))
+		decisions = append(decisions, decision)
+	}
+
+	for nodeID, node := range tempNodes {
+		s.nodes[nodeID] = cloneNode(node)
+	}
+
+	updated := cloneWorkload(workload)
+	updated.Replicas = replicas
+	updated.State = domain.WorkloadStateRunning
+	updated.UpdatedAt = now
+	updated.StatusReason = inferencePlacementReason(workload, placements)
+	updated.SchedulingExplanation = updated.StatusReason
+	updated.Placement = &placements[0]
+	updated.ReplicaPlacements = clonePlacements(placements)
+
+	s.workloads[workload.ID] = cloneWorkload(updated)
+
+	decision := scheduler.Decision{
+		Outcome:      scheduler.OutcomePlaced,
+		SelectedNode: cloneSchedulerNodePointer(decisions[0].SelectedNode),
+		Reason:       updated.StatusReason,
+	}
+	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, true, nil
 }
 
 type preemptionCandidate struct {
@@ -587,7 +678,7 @@ func (s *MemoryStore) selectPreemptableVictimsLocked(nodeID string, priority dom
 		if workload.State != domain.WorkloadStateRunning {
 			continue
 		}
-		if workload.Placement == nil || workload.Placement.NodeID != nodeID {
+		if !workloadTargetsNode(workload, nodeID) {
 			continue
 		}
 		if priorityRank(workload.Priority) >= priorityRank(priority) {
@@ -776,6 +867,9 @@ func cloneWorkload(workload domain.Workload) domain.Workload {
 		placement := *workload.Placement
 		workload.Placement = &placement
 	}
+	if len(workload.ReplicaPlacements) > 0 {
+		workload.ReplicaPlacements = clonePlacements(workload.ReplicaPlacements)
+	}
 	return workload
 }
 
@@ -803,6 +897,136 @@ func cloneWorkloads(workloads []domain.Workload) []domain.Workload {
 	return out
 }
 
+func clonePlacements(placements []domain.Placement) []domain.Placement {
+	if len(placements) == 0 {
+		return nil
+	}
+	out := make([]domain.Placement, len(placements))
+	copy(out, placements)
+	return out
+}
+
+func placementFromNode(node domain.Node) domain.Placement {
+	return domain.Placement{
+		NodeID:     node.ID,
+		Region:     node.Region,
+		DataCenter: node.DataCenter,
+		Zone:       node.Zone,
+		Provider:   node.Provider,
+	}
+}
+
+func cloneNodeMap(nodes map[string]domain.Node) map[string]domain.Node {
+	out := make(map[string]domain.Node, len(nodes))
+	for id, node := range nodes {
+		out[id] = cloneNode(node)
+	}
+	return out
+}
+
+func appendUniqueWorkloadID(existing []string, id string) []string {
+	for _, existingID := range existing {
+		if existingID == id {
+			return append([]string(nil), existing...)
+		}
+	}
+	return append(append([]string(nil), existing...), id)
+}
+
+func cloneSchedulerNodePointer(node *scheduler.Node) *scheduler.Node {
+	if node == nil {
+		return nil
+	}
+	cloned := *node
+	return &cloned
+}
+
+func workloadTargetsNode(workload domain.Workload, nodeID string) bool {
+	if workload.Placement != nil && workload.Placement.NodeID == nodeID {
+		return true
+	}
+	for _, placement := range workload.ReplicaPlacements {
+		if placement.NodeID == nodeID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *MemoryStore) evictWorkloadFromNodeLocked(workload domain.Workload, nodeID string, now time.Time, finalState domain.WorkloadState, reason string, preemptNoticeSeconds int) (domain.Workload, int, bool) {
+	if workload.Type == domain.WorkloadTypeInference && len(workload.ReplicaPlacements) > 0 {
+		remaining := removePlacementsForNode(workload.ReplicaPlacements, nodeID)
+		if len(remaining) == len(workload.ReplicaPlacements) {
+			if workload.Placement == nil || workload.Placement.NodeID != nodeID {
+				return domain.Workload{}, 0, false
+			}
+			remaining = nil
+		}
+
+		updated := cloneWorkload(workload)
+		updated.StatusReason = reason
+		updated.SchedulingExplanation = reason
+		updated.PreemptNoticeSeconds = preemptNoticeSeconds
+		updated.DrainStartedAt = timePtr(now)
+		updated.ResumeEligible = workload.Resumable
+		if workload.Resumable {
+			updated.CheckpointState = "checkpointed"
+		} else {
+			updated.CheckpointState = "drained"
+		}
+		if len(remaining) > 0 {
+			updated.State = domain.WorkloadStateRunning
+			updated.Placement = &remaining[0]
+			updated.ReplicaPlacements = clonePlacements(remaining)
+			updated.StatusReason = fmt.Sprintf("%s; %d/%d replica(s) remain", reason, len(remaining), len(workload.ReplicaPlacements))
+			updated.SchedulingExplanation = updated.StatusReason
+			return updated, 1, true
+		}
+
+		updated.State = finalState
+		updated.Placement = nil
+		updated.ReplicaPlacements = nil
+		return updated, 1, true
+	}
+
+	if workload.Placement == nil || workload.Placement.NodeID != nodeID {
+		return domain.Workload{}, 0, false
+	}
+
+	updated := cloneWorkload(workload)
+	updated.State = finalState
+	updated.Placement = nil
+	updated.ReplicaPlacements = nil
+	updated.StatusReason = reason
+	updated.SchedulingExplanation = reason
+	updated.PreemptNoticeSeconds = preemptNoticeSeconds
+	updated.DrainStartedAt = timePtr(now)
+	if workload.Resumable {
+		updated.CheckpointState = "checkpointed"
+	} else {
+		updated.CheckpointState = "drained"
+	}
+	updated.ResumeEligible = workload.Resumable
+	return updated, 1, true
+}
+
+func removePlacementsForNode(placements []domain.Placement, nodeID string) []domain.Placement {
+	if len(placements) == 0 {
+		return nil
+	}
+	remaining := make([]domain.Placement, 0, len(placements))
+	for _, placement := range placements {
+		if placement.NodeID == nodeID {
+			continue
+		}
+		remaining = append(remaining, placement)
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	return remaining
+}
+
 func cloneSchedulingResults(results []SchedulingResult) []SchedulingResult {
 	out := make([]SchedulingResult, 0, len(results))
 	for _, result := range results {
@@ -824,28 +1048,18 @@ func (s *MemoryStore) preemptWorkloadsOnNodeLocked(node *domain.Node, victims []
 	}
 
 	for workloadID, workload := range s.workloads {
-		if workload.State != domain.WorkloadStateRunning {
-			continue
-		}
-		if workload.Placement == nil || workload.Placement.NodeID != node.ID {
+		if !workloadTargetsNode(workload, node.ID) {
 			continue
 		}
 		if _, ok := victimSet[workloadID]; !ok {
 			continue
 		}
 
-		updated := cloneWorkload(workload)
-		updated.State = domain.WorkloadStatePending
-		updated.Placement = nil
-		updated.StatusReason = reason
-		updated.SchedulingExplanation = reason
-		updated.PreemptNoticeSeconds = 0
-		updated.DrainStartedAt = timePtr(now)
-		updated.CheckpointState = "drained"
-		updated.ResumeEligible = workload.Resumable
-		if workload.Resumable {
-			updated.CheckpointState = "checkpointed"
+		updated, removedGPUs, ok := s.evictWorkloadFromNodeLocked(workload, node.ID, now, domain.WorkloadStatePending, reason, 0)
+		if !ok {
+			continue
 		}
+		_ = removedGPUs
 		updated.UpdatedAt = now
 		s.workloads[workloadID] = cloneWorkload(updated)
 		affected = append(affected, cloneWorkload(updated))
@@ -863,22 +1077,14 @@ func (s *MemoryStore) preemptWorkloadsOnNodeLocked(node *domain.Node, victims []
 func (s *MemoryStore) evictNodeWorkloadsLocked(node *domain.Node, now time.Time, state domain.WorkloadState, reason string) []domain.Workload {
 	affected := make([]domain.Workload, 0)
 	for workloadID, workload := range s.workloads {
-		if workload.State != domain.WorkloadStateRunning {
-			continue
-		}
-		if workload.Placement == nil || workload.Placement.NodeID != node.ID {
+		if !workloadTargetsNode(workload, node.ID) {
 			continue
 		}
 
-		updated := cloneWorkload(workload)
-		updated.State = state
-		updated.Placement = nil
-		updated.StatusReason = reason
-		updated.SchedulingExplanation = reason
-		updated.PreemptNoticeSeconds = 0
-		updated.DrainStartedAt = timePtr(now)
-		updated.CheckpointState = "drained"
-		updated.ResumeEligible = false
+		updated, _, ok := s.evictWorkloadFromNodeLocked(workload, node.ID, now, state, reason, 0)
+		if !ok {
+			continue
+		}
 		updated.UpdatedAt = now
 		s.workloads[workloadID] = cloneWorkload(updated)
 		affected = append(affected, cloneWorkload(updated))
@@ -895,10 +1101,12 @@ func (s *MemoryStore) evictSpotNodeWorkloadsLocked(node *domain.Node, now time.T
 		updated := workload
 		updated.PreemptNoticeSeconds = 30
 		updated.DrainStartedAt = timePtr(now)
-		updated.CheckpointState = "checkpointed"
-		updated.ResumeEligible = workload.Resumable
-		if !workload.Resumable {
+		if workload.Resumable {
+			updated.CheckpointState = "checkpointed"
+			updated.ResumeEligible = true
+		} else {
 			updated.CheckpointState = "drained"
+			updated.ResumeEligible = false
 		}
 		s.workloads[workload.ID] = cloneWorkload(updated)
 	}
@@ -954,9 +1162,61 @@ func priorityRank(priority domain.WorkloadPriority) int {
 	}
 }
 
+func normalizeInferenceReplicas(replicas int) int {
+	if replicas < 1 {
+		return 1
+	}
+	return replicas
+}
+
+func inferencePlacementReason(workload domain.Workload, placements []domain.Placement) string {
+	replicas := normalizeInferenceReplicas(workload.Replicas)
+	if replicas <= 1 {
+		if len(placements) == 0 {
+			return fmt.Sprintf("inference workload placed on node %s", workload.ID)
+		}
+		return fmt.Sprintf("inference workload placed on node %s", placements[0].NodeID)
+	}
+
+	nodeIDs := make([]string, 0, len(placements))
+	for _, placement := range placements {
+		nodeIDs = append(nodeIDs, placement.NodeID)
+	}
+	return fmt.Sprintf("inference service placed across %d replica(s) on nodes %s", replicas, strings.Join(nodeIDs, ", "))
+}
+
+func inferenceQueueReason(workload domain.Workload) string {
+	replicas := normalizeInferenceReplicas(workload.Replicas)
+	if replicas <= 1 {
+		return fmt.Sprintf("no eligible inference placement found for workload %s", workload.ID)
+	}
+	return fmt.Sprintf("no eligible placement found for inference service %s requiring %d replica(s)", workload.ID, replicas)
+}
+
+func inferenceQueueReasonForPartial(workload domain.Workload, placedReplicas, desiredReplicas int, reason string) string {
+	if reason == "" {
+		reason = "no eligible node selected"
+	}
+	if desiredReplicas <= 1 {
+		return reason
+	}
+	return fmt.Sprintf("only %d/%d inference replica(s) could be placed for %s: %s", placedReplicas, desiredReplicas, workload.ID, reason)
+}
+
 func toSchedulerNodesLocked(nodes map[string]domain.Node) []scheduler.Node {
 	out := make([]scheduler.Node, 0, len(nodes))
 	for _, node := range nodes {
+		out = append(out, toSchedulerNode(node))
+	}
+	return out
+}
+
+func toSchedulerNodesLockedExcluding(nodes map[string]domain.Node, excluded map[string]struct{}) []scheduler.Node {
+	out := make([]scheduler.Node, 0, len(nodes))
+	for id, node := range nodes {
+		if _, ok := excluded[id]; ok {
+			continue
+		}
 		out = append(out, toSchedulerNode(node))
 	}
 	return out

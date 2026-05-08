@@ -37,8 +37,10 @@ type Workload struct {
 	DurationSeconds       int              `json:"duration_seconds"`
 	SpotTolerant          bool             `json:"spot_tolerant"`
 	Resumable             bool             `json:"resumable"`
+	Replicas              int              `json:"replicas,omitempty"`
 	State                 WorkloadState    `json:"state"`
 	Placement             *Placement       `json:"placement,omitempty"`
+	ReplicaPlacements     []Placement      `json:"replica_placements,omitempty"`
 	StatusReason          string           `json:"status_reason,omitempty"`
 	SchedulingExplanation string           `json:"scheduling_explanation,omitempty"`
 	PreemptNoticeSeconds  int              `json:"preempt_notice_seconds,omitempty"`
