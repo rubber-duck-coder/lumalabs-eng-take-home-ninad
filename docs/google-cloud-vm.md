@@ -33,6 +33,18 @@ docker compose version
 
 ## Deploy
 
+Automated reviewer path from your laptop:
+
+```bash
+export GOOGLE_CLOUD_PROJECT="<project-id>"
+export GCP_CREDENTIALS_FILE="<path-to-service-account-json>"
+make gcp-vm-reviewer
+```
+
+This path creates/reuses the VM, ensures HTTP access on port `80`, deploys with Docker Compose using `WEB_PORT=80`, and prints the public URL.
+
+Manual path on the VM:
+
 On the VM:
 
 ```bash
@@ -41,18 +53,13 @@ cd lumalabs-eng-take-home-ninad
 cp .env.example .env
 ```
 
-Edit `.env` on the VM so the web container binds to port `80`:
-
-```bash
-WEB_PORT=80
-API_PORT=8080
-```
-
 Then start the stack:
 
 ```bash
 make vm-deploy
 ```
+
+`make vm-deploy` intentionally runs Compose with `WEB_PORT=80` and `API_PORT=8080`, so the public URL is `http://<vm-external-ip>` rather than `http://<vm-external-ip>:5173`.
 
 ## Verify
 

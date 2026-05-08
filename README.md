@@ -111,8 +111,9 @@ If you already use the default Google credentials environment variable locally, 
 
 What `make gcp-vm-reviewer` does:
 - Authenticates and sets gcloud project.
+- Ensures an HTTP firewall rule exists for `tcp:80`.
 - Creates a VM if it does not already exist.
-- SSHes into the VM, installs required tools (`git`, `make`, Docker), clones/pulls this repo, and runs `docker compose up --build -d`.
+- SSHes into the VM, installs required tools (`git`, `make`, Docker), clones/pulls this repo, and runs Docker Compose with `WEB_PORT=80` and `API_PORT=8080`.
 - Prints a shareable URL like `http://<EXTERNAL_IP>` for team review.
 
 Additional helper commands:

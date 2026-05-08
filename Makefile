@@ -15,7 +15,7 @@ integration:
 	go test -tags=integration ./integration/...
 
 e2e:
-	@if [ -z "$(BASE_URL)" ]; then echo "BASE_URL is required (for example BASE_URL=http://localhost:8080 make e2e)"; exit 1; fi
+	@if [ -z "$(BASE_URL)" ]; then echo "BASE_URL is required (for example BASE_URL=http://localhost:5173 make e2e, or BASE_URL=http://<vm-ip> make e2e)"; exit 1; fi
 	BASE_URL=$(BASE_URL) go test -tags=e2e ./e2e/...
 
 verify: unit integration frontend-build
@@ -40,7 +40,7 @@ compose-down:
 
 vm-deploy:
 	git pull --ff-only
-	docker compose up --build -d --remove-orphans
+	WEB_PORT=80 API_PORT=8080 docker compose up --build -d --remove-orphans
 	docker compose ps
 
 gcp-check-env:
@@ -51,6 +51,14 @@ gcp-check-env:
 	@echo "gcloud auth/project configured for $(GOOGLE_CLOUD_PROJECT)"
 
 gcp-vm-create: gcp-check-env
+	@if gcloud compute firewall-rules describe default-allow-http >/dev/null 2>&1; then \
+		echo "Firewall rule default-allow-http already exists"; \
+	else \
+		gcloud compute firewall-rules create default-allow-http \
+			--allow tcp:80 \
+			--target-tags http-server \
+			--description "Allow HTTP access for review VM"; \
+	fi
 	@if gcloud compute instances describe "$(GCP_VM_NAME)" --zone "$(GCP_ZONE)" >/dev/null 2>&1; then \
 		echo "VM $(GCP_VM_NAME) already exists in $(GCP_ZONE)"; \
 	else \
@@ -79,7 +87,7 @@ gcp-vm-deploy: gcp-check-env
 		fi && \
 		cd lumalabs-eng-take-home-ninad && \
 		git pull --ff-only && \
-		docker compose up --build -d --remove-orphans && \
+		WEB_PORT=80 API_PORT=8080 docker compose up --build -d --remove-orphans && \
 		docker compose ps \
 	"
 
