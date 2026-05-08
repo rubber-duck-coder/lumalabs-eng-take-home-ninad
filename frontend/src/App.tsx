@@ -60,7 +60,7 @@ type DisruptionResult = {
   scheduled?: Array<{ workload: Workload; decision?: { reason?: string } }>;
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL || window.location.origin;
+const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);

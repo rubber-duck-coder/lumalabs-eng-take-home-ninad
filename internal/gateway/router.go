@@ -45,15 +45,14 @@ func NewRouterWithStore(memoryStore *store.MemoryStore) http.Handler {
 }
 
 func withCORS(next http.Handler) http.Handler {
-	allowedOrigin := os.Getenv("CORS_ALLOW_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = "http://localhost:5173"
-	}
+	allowedOrigins := allowedOrigins()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		allow := origin == "" || origin == allowedOrigin
+		allow := origin == "" || allowedOrigins[origin]
 		if allow {
-			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
 			w.Header().Set("Vary", "Origin")
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -68,6 +67,22 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func allowedOrigins() map[string]bool {
+	raw := os.Getenv("CORS_ALLOW_ORIGIN")
+	if raw == "" {
+		raw = "http://localhost:5173,http://127.0.0.1:5173"
+	}
+
+	allowed := make(map[string]bool)
+	for _, origin := range strings.Split(raw, ",") {
+		trimmed := strings.TrimSpace(origin)
+		if trimmed != "" {
+			allowed[trimmed] = true
+		}
+	}
+	return allowed
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {

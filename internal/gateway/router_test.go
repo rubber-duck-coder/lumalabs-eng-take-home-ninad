@@ -29,17 +29,19 @@ func TestHealth(t *testing.T) {
 }
 
 func TestCORSPreflight(t *testing.T) {
-	req := httptest.NewRequest(http.MethodOptions, "/workloads", nil)
-	req.Header.Set("Origin", "http://localhost:5173")
-	rec := httptest.NewRecorder()
+	for _, origin := range []string{"http://localhost:5173", "http://127.0.0.1:5173"} {
+		req := httptest.NewRequest(http.MethodOptions, "/workloads", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
 
-	NewRouter().ServeHTTP(rec, req)
+		NewRouter().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNoContent {
-		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rec.Code)
-	}
-	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
-		t.Fatalf("expected wildcard cors header, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("expected status %d, got %d", http.StatusNoContent, rec.Code)
+		}
+		if rec.Header().Get("Access-Control-Allow-Origin") != origin {
+			t.Fatalf("expected cors header %q, got %q", origin, rec.Header().Get("Access-Control-Allow-Origin"))
+		}
 	}
 }
 
