@@ -163,12 +163,14 @@ Current progress:
 - `events` and `fleet` are extracted as dedicated internal packages.
 - `workloads` is now extracted for submit, queue, and scheduler-tick orchestration.
 - `fleet` now also owns node disruption and preemption policy.
-- The next boundary to isolate is reconciliation versus pure disruption handling.
+- `reconciler` now owns health simulation and automatic recovery flows.
+- The next boundary to isolate is how reconciliation feeds into future scheduling policy.
 
 Target module boundaries:
 - `gateway`: HTTP transport, request validation, response shaping.
 - `workloads`: submit, queue, schedule, preempt, and lifecycle transitions.
 - `fleet`: node health, capacity, disruption, and reconciliation.
+- `reconciler`: simulated health changes and background recovery transitions.
 - `scheduler`: pure placement and rebalance policy.
 - `events`: append-only audit trail and event fanout.
 - `store`: persistence adapters and transactional state loading/saving.

@@ -28,7 +28,7 @@ At every logical checkpoint, update:
 
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
-- Active implementation: control-plane module split and preemption contract next, with `events`, `fleet`, and `workloads` now extracted.
+- Active implementation: control-plane module split and preemption contract next, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
 - Next recommended task: continue modularizing the control plane into clear internal responsibility boundaries, define drain/checkpoint semantics for preemption, then implement inference scale-out, priority preemption, reconciliation, and rebalance policies.
 
 ## Decision Log Index
@@ -69,9 +69,9 @@ At every logical checkpoint, update:
 | T025 | 5 | Add Postgres-backed store | backend + infra | done | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
 | T026 | 6 | Add inference scale-out model | backend + frontend | todo | T009-T025 | Model replica-aware inference workloads and show horizontal scaling intent in the UI/API. |
 | T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
-| T028 | 6 | Add health reconciliation loop | backend + infra | todo | T012-T025 | Simulate or ingest node health changes without manual admin clicks. |
+| T028 | 6 | Add health reconciliation loop | backend + infra | done | T012-T025 | Simulate or ingest node health changes without manual admin clicks. Current slice adds a background reconciler loop. |
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
-| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, and `workloads` packages. |
+| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | todo | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 
 ## Checkpoint Entries
@@ -562,6 +562,37 @@ Decisions:
 
 Resume note:
 - Next step is to decide whether reconciliation should stay in the same fleet package or split into a dedicated simulator/reconciler boundary.
+
+### 014: Reconciliation Boundary
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Added `internal/reconciler/manager.go` for background health reconciliation.
+- Wired a periodic reconciler loop into `cmd/control-plane/main.go`.
+- Added tests that prove recovering nodes transition to healthy and trigger scheduling.
+
+Files:
+- `cmd/control-plane/main.go`
+- `internal/reconciler/manager.go`
+- `internal/reconciler/manager_test.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `go test ./internal/reconciler ./cmd/control-plane`
+- `go test ./...`
+- `make verify`
+
+Decisions:
+- Reconciliation is now a dedicated package distinct from node disruption handling.
+- The local app runs a lightweight background reconciliation loop by default so health changes happen without manual admin clicks.
+- Reconciler events reuse the shared event recorder and feed pending workloads back into scheduling.
+
+Resume note:
+- Next, keep the control-plane split going only if it helps preemption/checkpoint behavior; otherwise move to the contract work and E2E coverage.
 
 ## Template
 
