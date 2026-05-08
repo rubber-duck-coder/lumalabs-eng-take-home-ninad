@@ -18,14 +18,14 @@ var (
 )
 
 type SchedulingResult struct {
-	Workload domain.Workload
-	Decision scheduler.Decision
+	Workload domain.Workload    `json:"workload"`
+	Decision scheduler.Decision `json:"decision"`
 }
 
 type DisruptionResult struct {
-	Node              domain.Node
-	AffectedWorkloads []domain.Workload
-	Scheduled         []SchedulingResult
+	Node              domain.Node         `json:"node"`
+	AffectedWorkloads []domain.Workload   `json:"affected_workloads"`
+	Scheduled         []SchedulingResult  `json:"scheduled"`
 }
 
 type MemoryStore struct {

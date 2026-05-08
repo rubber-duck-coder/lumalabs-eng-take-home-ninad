@@ -55,7 +55,8 @@ type FleetSummary = {
 type NodeAction = "fail" | "recover" | "preempt-spot";
 
 type DisruptionResult = {
-  node: Node;
+  node?: Node;
+  Node?: Node;
   affected_workloads?: Workload[];
   scheduled?: Array<{ workload: Workload; decision?: { reason?: string } }>;
 };
@@ -240,8 +241,12 @@ export function App() {
 
     try {
       const response = await requestJSON<DisruptionResult>(endpoint, { method: "POST" });
+      const node = response.node ?? response.Node;
+      if (!node) {
+        throw new Error("invalid disruption response: missing node");
+      }
       setStatusMessage(
-        `${action === "fail" ? "Failed" : action === "recover" ? "Recovered" : "Preempted"} ${response.node.id}.`
+        `${action === "fail" ? "Failed" : action === "recover" ? "Recovered" : "Preempted"} ${node.id}.`
       );
       await refreshAll();
     } catch (err) {

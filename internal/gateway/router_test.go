@@ -247,6 +247,31 @@ func TestFailNodeEndpointRequeuesAndReschedulesAffectedWorkload(t *testing.T) {
 	}
 }
 
+func TestFailNodeEndpointReturnsSnakeCaseNodeField(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+	now := fixedTestTime()
+	_, _ = memoryStore.CreateNode(testNode("node-a", "A100", 4, 4, domain.CapacityClassOnDemand, domain.NodeHealthHealthy, []string{"w-running"}))
+	_, _ = memoryStore.CreateWorkload(testWorkload("w-running", "A100", 4, domain.WorkloadPriorityHigh, domain.WorkloadStateRunning, &domain.Placement{NodeID: "node-a"}, now))
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/nodes/node-a/fail", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := payload["node"]; !ok {
+		t.Fatalf("expected snake_case node field, got %+v", payload)
+	}
+	if _, ok := payload["Node"]; ok {
+		t.Fatalf("expected no capitalized Node field, got %+v", payload)
+	}
+}
+
 func TestRecoverNodeEndpointSchedulesPendingWorkload(t *testing.T) {
 	memoryStore := store.NewMemoryStore()
 	now := fixedTestTime()
