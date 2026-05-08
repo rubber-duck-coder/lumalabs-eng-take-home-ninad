@@ -6,9 +6,14 @@ type Workload = {
   gpu_type: string;
   gpu_count: number;
   priority: string;
+  resumable?: boolean;
   state: string;
   status_reason?: string;
   scheduling_explanation?: string;
+  preempt_notice_seconds?: number;
+  drain_started_at?: string;
+  checkpoint_state?: string;
+  resume_eligible?: boolean;
   placement?: {
     node_id: string;
     region?: string;
@@ -211,7 +216,8 @@ export function App() {
       gpu_count: Number(data.get("gpu_count")),
       priority: String(data.get("priority") ?? "normal"),
       duration_seconds: Number(data.get("duration_seconds")),
-      spot_tolerant: data.get("spot_tolerant") === "on"
+      spot_tolerant: data.get("spot_tolerant") === "on",
+      resumable: data.get("resumable") === "on"
     };
 
     try {
@@ -416,9 +422,13 @@ export function App() {
               Duration Seconds
               <input name="duration_seconds" type="number" min={1} defaultValue={300} required />
             </label>
-            <label className="checkbox">
+              <label className="checkbox">
               <input name="spot_tolerant" type="checkbox" defaultChecked />
               Spot tolerant
+            </label>
+            <label className="checkbox">
+              <input name="resumable" type="checkbox" />
+              Resumable
             </label>
             <button className="button button--primary button--form" disabled={submitting} type="submit">
               {submitting ? "Submitting..." : "Submit workload"}
@@ -437,10 +447,24 @@ export function App() {
                   {result.gpu_type} x {result.gpu_count}
                 </span>
                 <span>{result.priority}</span>
+                {result.resumable && <span>Resumable</span>}
                 {result.placement?.node_id && <span>Placed on {result.placement.node_id}</span>}
               </div>
               {result.status_reason && <p className="muted">{result.status_reason}</p>}
               {result.scheduling_explanation && <p className="muted">{result.scheduling_explanation}</p>}
+              {(result.preempt_notice_seconds || result.checkpoint_state || result.resume_eligible) && (
+                <div className="event-meta">
+                  {result.preempt_notice_seconds ? (
+                    <span className="event-meta__item">notice: {result.preempt_notice_seconds}s</span>
+                  ) : null}
+                  {result.checkpoint_state ? (
+                    <span className="event-meta__item">checkpoint: {result.checkpoint_state}</span>
+                  ) : null}
+                  {result.resume_eligible ? (
+                    <span className="event-meta__item">resume eligible</span>
+                  ) : null}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -558,6 +582,19 @@ export function App() {
                       )}
                       {workload.scheduling_explanation && (
                         <span className="muted">{workload.scheduling_explanation}</span>
+                      )}
+                      {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
+                        <div className="event-meta">
+                          {workload.preempt_notice_seconds ? (
+                            <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
+                          ) : null}
+                          {workload.checkpoint_state ? (
+                            <span className="event-meta__item">{workload.checkpoint_state}</span>
+                          ) : null}
+                          {workload.resume_eligible ? (
+                            <span className="event-meta__item">resume eligible</span>
+                          ) : null}
+                        </div>
                       )}
                     </td>
                   </tr>

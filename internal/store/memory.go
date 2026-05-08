@@ -184,6 +184,7 @@ func (s *MemoryStore) SeedDemoData() (DemoDataSummary, error) {
 			Priority:              domain.WorkloadPriorityLow,
 			DurationSeconds:       300,
 			SpotTolerant:          true,
+			Resumable:             true,
 			State:                 domain.WorkloadStatePending,
 			StatusReason:          "queued for spot capacity",
 			SchedulingExplanation: "queued for spot capacity",
@@ -383,7 +384,7 @@ func (s *MemoryStore) PreemptSpotNode(id string, now time.Time) (DisruptionResul
 		return DisruptionResult{}, ErrInvalid
 	}
 
-	affected := s.evictNodeWorkloadsLocked(&node, now, domain.WorkloadStatePending, "spot node preempted; workload re-queued")
+	affected := s.evictSpotNodeWorkloadsLocked(&node, now, "spot node preempted; workload re-queued")
 	node.Health = domain.NodeHealthFailed
 	node.UpdatedAt = now
 	s.nodes[id] = cloneNode(node)
@@ -662,6 +663,10 @@ func (s *MemoryStore) evictNodeWorkloadsLocked(node *domain.Node, now time.Time,
 		updated.Placement = nil
 		updated.StatusReason = reason
 		updated.SchedulingExplanation = reason
+		updated.PreemptNoticeSeconds = 0
+		updated.DrainStartedAt = timePtr(now)
+		updated.CheckpointState = "drained"
+		updated.ResumeEligible = false
 		updated.UpdatedAt = now
 		s.workloads[workloadID] = cloneWorkload(updated)
 		affected = append(affected, cloneWorkload(updated))
@@ -670,6 +675,37 @@ func (s *MemoryStore) evictNodeWorkloadsLocked(node *domain.Node, now time.Time,
 	node.AllocatedGPUs = 0
 	node.RunningWorkloadIDs = nil
 	return affected
+}
+
+func (s *MemoryStore) evictSpotNodeWorkloadsLocked(node *domain.Node, now time.Time, reason string) []domain.Workload {
+	affected := s.evictNodeWorkloadsLocked(node, now, domain.WorkloadStatePending, reason)
+	for _, workload := range affected {
+		updated := workload
+		updated.PreemptNoticeSeconds = 30
+		updated.DrainStartedAt = timePtr(now)
+		updated.CheckpointState = "checkpointed"
+		updated.ResumeEligible = workload.Resumable
+		if !workload.Resumable {
+			updated.CheckpointState = "drained"
+		}
+		s.workloads[workload.ID] = cloneWorkload(updated)
+	}
+	return s.refreshAffectedWorkloadsLocked(affected)
+}
+
+func (s *MemoryStore) refreshAffectedWorkloadsLocked(workloads []domain.Workload) []domain.Workload {
+	refreshed := make([]domain.Workload, 0, len(workloads))
+	for _, workload := range workloads {
+		if current, ok := s.workloads[workload.ID]; ok {
+			refreshed = append(refreshed, cloneWorkload(current))
+		}
+	}
+	return refreshed
+}
+
+func timePtr(t time.Time) *time.Time {
+	copied := t
+	return &copied
 }
 
 func toSchedulerWorkload(workload domain.Workload) scheduler.Workload {

@@ -150,6 +150,44 @@ Recommended follow-up sequence:
 5. Add rebalance logic for demand shifts across the heterogeneous fleet.
 6. Cover the above in E2E scenarios and submission docs.
 
+## Scheduling Strategy
+
+This is the optimization policy that will sit under the scheduler once the control-plane boundaries are stable.
+
+Policy shape:
+- Hard constraints first.
+- Class-aware scoring second.
+- Rebalance only on meaningful state changes.
+- Prefer stability over churn.
+
+Hard constraints:
+- GPU type and GPU count must fit.
+- Node health must allow scheduling.
+- Capacity class must be allowed for the workload.
+- Zone/provider constraints must be respected.
+- Spot tolerance must be honored.
+
+Soft objectives:
+- Training: reliability and uninterrupted runtime.
+- Inference: latency, replica spread, and availability.
+- Batch: cost efficiency and throughput.
+- Cross-cutting: utilization, fragmentation, fairness, and locality.
+
+Rebalance triggers:
+- Node health changes.
+- Spot preemption risk.
+- Priority inversion.
+- Material demand shift across GPU types or zones.
+- Fragmentation that strands capacity.
+
+Anti-churn rule:
+- Do not move running workloads unless the expected improvement is large enough or the workload is resumable/checkpointable.
+
+Acceptance:
+- Scheduler decisions remain explainable.
+- Workload-class behavior is explicit in tests.
+- Rebalance thresholds are deterministic and easy to tune.
+
 ## Phase 6: Control-Plane Modularization
 
 Owner: coordinator plus backend coding agents.
@@ -164,7 +202,8 @@ Current progress:
 - `workloads` is now extracted for submit, queue, and scheduler-tick orchestration.
 - `fleet` now also owns node disruption and preemption policy.
 - `reconciler` now owns health simulation and automatic recovery flows.
-- The next boundary to isolate is how reconciliation feeds into future scheduling policy.
+- Workload submission now carries resumability and drain/checkpoint metadata for preemption-aware flows.
+- The next boundary to isolate is how reconciliation feeds into future scheduling policy and priority preemption.
 
 Target module boundaries:
 - `gateway`: HTTP transport, request validation, response shaping.

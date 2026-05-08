@@ -28,8 +28,8 @@ At every logical checkpoint, update:
 
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
-- Active implementation: control-plane module split and preemption contract next, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
-- Next recommended task: continue modularizing the control plane into clear internal responsibility boundaries, define drain/checkpoint semantics for preemption, then implement inference scale-out, priority preemption, reconciliation, and rebalance policies.
+- Active implementation: control-plane module split complete enough for the next behavior work, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
+- Next recommended task: define the scheduling optimization strategy, then implement priority preemption, inference scale-out, and rebalance policies on top of the existing drain/checkpoint contract.
 
 ## Decision Log Index
 
@@ -71,8 +71,9 @@ At every logical checkpoint, update:
 | T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | done | T012-T025 | Simulate or ingest node health changes without manual admin clicks. Current slice adds a background reconciler loop. |
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
-| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
-| T031 | 6 | Define preemption checkpoint contract | backend + frontend | todo | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
+| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | done | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
+| T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
+| T032 | 6 | Define scheduling optimization strategy | backend | todo | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. |
 
 ## Checkpoint Entries
 
@@ -593,6 +594,40 @@ Decisions:
 
 Resume note:
 - Next, keep the control-plane split going only if it helps preemption/checkpoint behavior; otherwise move to the contract work and E2E coverage.
+
+### 015: Preemption Contract Boundary
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Added resumability and preemption metadata to the workload domain model.
+- Threaded resumability through workload submission and API request handling.
+- Stamped drain/checkpoint metadata on workloads when a spot node is preempted.
+- Surfaced the new contract in the frontend submission flow and workload table.
+
+Files:
+- `frontend/src/App.tsx`
+- `internal/controlplane/service.go`
+- `internal/domain/workload.go`
+- `internal/gateway/router.go`
+- `internal/store/memory.go`
+- `internal/store/memory_test.go`
+- `internal/store/postgres.go`
+- `internal/workloads/manager.go`
+
+Tests run:
+- `go test ./internal/domain ./internal/workloads ./internal/fleet ./internal/reconciler ./internal/store ./internal/gateway ./internal/controlplane`
+- `cd frontend && npm run build`
+
+Decisions:
+- Spot preemption now records drain/checkpoint metadata rather than treating disruption as a bare node state change.
+- Workloads remain eligible for rescheduling after preemption, but the runtime contract now preserves resumability hints for future checkpoint-aware behavior.
+- The dashboard exposes resumability as an explicit user choice on submission.
+
+Resume note:
+- Move next into class-aware scoring and priority preemption using the new contract fields as the policy input.
 
 ## Template
 

@@ -36,10 +36,15 @@ type Workload struct {
 	Priority              WorkloadPriority `json:"priority"`
 	DurationSeconds       int              `json:"duration_seconds"`
 	SpotTolerant          bool             `json:"spot_tolerant"`
+	Resumable             bool             `json:"resumable"`
 	State                 WorkloadState    `json:"state"`
 	Placement             *Placement       `json:"placement,omitempty"`
 	StatusReason          string           `json:"status_reason,omitempty"`
 	SchedulingExplanation string           `json:"scheduling_explanation,omitempty"`
+	PreemptNoticeSeconds  int              `json:"preempt_notice_seconds,omitempty"`
+	DrainStartedAt        *time.Time       `json:"drain_started_at,omitempty"`
+	CheckpointState       string           `json:"checkpoint_state,omitempty"`
+	ResumeEligible        bool             `json:"resume_eligible"`
 	SubmittedAt           time.Time        `json:"submitted_at"`
 	UpdatedAt             time.Time        `json:"updated_at"`
 }

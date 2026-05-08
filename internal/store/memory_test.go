@@ -458,12 +458,13 @@ func TestPreemptSpotNodePreemptsRunningWorkloads(t *testing.T) {
 		UpdatedAt:          now,
 	})
 	_, _ = store.CreateWorkload(domain.Workload{
-		ID:       "w-spot",
-		Type:     domain.WorkloadTypeInference,
-		GPUType:  "L4",
-		GPUCount: 2,
-		Priority: domain.WorkloadPriorityNormal,
-		State:    domain.WorkloadStateRunning,
+		ID:        "w-spot",
+		Type:      domain.WorkloadTypeInference,
+		GPUType:   "L4",
+		GPUCount:  2,
+		Priority:  domain.WorkloadPriorityNormal,
+		Resumable: true,
+		State:     domain.WorkloadStateRunning,
 		Placement: &domain.Placement{
 			NodeID: "spot-1",
 		},
@@ -486,6 +487,15 @@ func TestPreemptSpotNodePreemptsRunningWorkloads(t *testing.T) {
 	}
 	if result.AffectedWorkloads[0].Placement != nil {
 		t.Fatalf("expected cleared placement, got %+v", result.AffectedWorkloads[0])
+	}
+	if !result.AffectedWorkloads[0].ResumeEligible {
+		t.Fatalf("expected resumable workload to remain resume eligible, got %+v", result.AffectedWorkloads[0])
+	}
+	if result.AffectedWorkloads[0].PreemptNoticeSeconds != 30 {
+		t.Fatalf("expected preempt notice to be recorded, got %+v", result.AffectedWorkloads[0])
+	}
+	if result.AffectedWorkloads[0].CheckpointState != "checkpointed" {
+		t.Fatalf("expected checkpoint state to be recorded, got %+v", result.AffectedWorkloads[0])
 	}
 	if len(result.Scheduled) != 1 {
 		t.Fatalf("expected one scheduling result after preemption, got %+v", result.Scheduled)

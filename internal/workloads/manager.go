@@ -18,6 +18,7 @@ type SubmitRequest struct {
 	Priority        domain.WorkloadPriority
 	DurationSeconds int
 	SpotTolerant    bool
+	Resumable       bool
 }
 
 type Manager struct {
@@ -44,6 +45,7 @@ func (m *Manager) Submit(req SubmitRequest) (domain.Workload, error) {
 		Priority:        req.Priority,
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
+		Resumable:       req.Resumable,
 		State:           domain.WorkloadStatePending,
 		SubmittedAt:     now,
 		UpdatedAt:       now,

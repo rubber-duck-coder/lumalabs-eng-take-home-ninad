@@ -102,13 +102,23 @@ func (s *PostgresStore) bootstrap(ctx context.Context) error {
 			priority TEXT NOT NULL,
 			duration_seconds INTEGER NOT NULL,
 			spot_tolerant BOOLEAN NOT NULL,
+			resumable BOOLEAN NOT NULL DEFAULT FALSE,
 			state TEXT NOT NULL,
 			placement JSONB,
 			status_reason TEXT NOT NULL DEFAULT '',
 			scheduling_explanation TEXT NOT NULL DEFAULT '',
+			preempt_notice_seconds INTEGER NOT NULL DEFAULT 0,
+			drain_started_at TIMESTAMPTZ,
+			checkpoint_state TEXT NOT NULL DEFAULT '',
+			resume_eligible BOOLEAN NOT NULL DEFAULT FALSE,
 			submitted_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
 		)`,
+		`ALTER TABLE workloads ADD COLUMN IF NOT EXISTS resumable BOOLEAN NOT NULL DEFAULT FALSE`,
+		`ALTER TABLE workloads ADD COLUMN IF NOT EXISTS preempt_notice_seconds INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE workloads ADD COLUMN IF NOT EXISTS drain_started_at TIMESTAMPTZ`,
+		`ALTER TABLE workloads ADD COLUMN IF NOT EXISTS checkpoint_state TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE workloads ADD COLUMN IF NOT EXISTS resume_eligible BOOLEAN NOT NULL DEFAULT FALSE`,
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
 			timestamp TIMESTAMPTZ NOT NULL,
@@ -194,7 +204,7 @@ func (s *PostgresStore) CreateWorkload(workload domain.Workload) (domain.Workloa
 func (s *PostgresStore) GetWorkload(id string) (domain.Workload, bool) {
 	ctx := context.Background()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, state, placement, status_reason, scheduling_explanation, submitted_at, updated_at
+		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, resumable, state, placement, status_reason, scheduling_explanation, preempt_notice_seconds, drain_started_at, checkpoint_state, resume_eligible, submitted_at, updated_at
 		FROM workloads
 		WHERE id = $1
 	`, id)
@@ -212,7 +222,7 @@ func (s *PostgresStore) GetWorkload(id string) (domain.Workload, bool) {
 func (s *PostgresStore) ListWorkloads() []domain.Workload {
 	ctx := context.Background()
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, state, placement, status_reason, scheduling_explanation, submitted_at, updated_at
+		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, resumable, state, placement, status_reason, scheduling_explanation, preempt_notice_seconds, drain_started_at, checkpoint_state, resume_eligible, submitted_at, updated_at
 		FROM workloads
 		ORDER BY submitted_at, id
 	`)
@@ -523,11 +533,15 @@ func insertState(ctx context.Context, tx *sql.Tx, state *MemoryStore) error {
 				return err
 			}
 		}
+		var drainStartedAt any
+		if workload.DrainStartedAt != nil {
+			drainStartedAt = *workload.DrainStartedAt
+		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO workloads (
-				id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, state, placement, status_reason, scheduling_explanation, submitted_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-		`, workload.ID, string(workload.Type), workload.GPUType, workload.GPUCount, string(workload.Priority), workload.DurationSeconds, workload.SpotTolerant, string(workload.State), placementJSON, workload.StatusReason, workload.SchedulingExplanation, workload.SubmittedAt, workload.UpdatedAt); err != nil {
+				id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, resumable, state, placement, status_reason, scheduling_explanation, preempt_notice_seconds, drain_started_at, checkpoint_state, resume_eligible, submitted_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		`, workload.ID, string(workload.Type), workload.GPUType, workload.GPUCount, string(workload.Priority), workload.DurationSeconds, workload.SpotTolerant, workload.Resumable, string(workload.State), placementJSON, workload.StatusReason, workload.SchedulingExplanation, workload.PreemptNoticeSeconds, drainStartedAt, workload.CheckpointState, workload.ResumeEligible, workload.SubmittedAt, workload.UpdatedAt); err != nil {
 			return err
 		}
 	}
@@ -567,7 +581,7 @@ func scanNodesTx(ctx context.Context, tx *sql.Tx) ([]domain.Node, error) {
 
 func scanWorkloadsTx(ctx context.Context, tx *sql.Tx) ([]domain.Workload, error) {
 	rows, err := tx.QueryContext(ctx, `
-		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, state, placement, status_reason, scheduling_explanation, submitted_at, updated_at
+		SELECT id, type, gpu_type, gpu_count, priority, duration_seconds, spot_tolerant, resumable, state, placement, status_reason, scheduling_explanation, preempt_notice_seconds, drain_started_at, checkpoint_state, resume_eligible, submitted_at, updated_at
 		FROM workloads
 		ORDER BY submitted_at, id
 	`)
@@ -614,7 +628,8 @@ func scanWorkloads(rows *sql.Rows) ([]domain.Workload, error) {
 	for rows.Next() {
 		var workload domain.Workload
 		var placementJSON []byte
-		if err := rows.Scan(&workload.ID, &workload.Type, &workload.GPUType, &workload.GPUCount, &workload.Priority, &workload.DurationSeconds, &workload.SpotTolerant, &workload.State, &placementJSON, &workload.StatusReason, &workload.SchedulingExplanation, &workload.SubmittedAt, &workload.UpdatedAt); err != nil {
+		var drainStartedAt sql.NullTime
+		if err := rows.Scan(&workload.ID, &workload.Type, &workload.GPUType, &workload.GPUCount, &workload.Priority, &workload.DurationSeconds, &workload.SpotTolerant, &workload.Resumable, &workload.State, &placementJSON, &workload.StatusReason, &workload.SchedulingExplanation, &workload.PreemptNoticeSeconds, &drainStartedAt, &workload.CheckpointState, &workload.ResumeEligible, &workload.SubmittedAt, &workload.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if len(placementJSON) > 0 {
@@ -623,6 +638,10 @@ func scanWorkloads(rows *sql.Rows) ([]domain.Workload, error) {
 				return nil, err
 			}
 			workload.Placement = &placement
+		}
+		if drainStartedAt.Valid {
+			value := drainStartedAt.Time
+			workload.DrainStartedAt = &value
 		}
 		workloads = append(workloads, cloneWorkload(workload))
 	}

@@ -93,6 +93,7 @@ type createWorkloadRequest struct {
 	Priority        domain.WorkloadPriority `json:"priority"`
 	DurationSeconds int                     `json:"duration_seconds"`
 	SpotTolerant    bool                    `json:"spot_tolerant"`
+	Resumable       bool                    `json:"resumable"`
 }
 
 func (app *App) createWorkload(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +114,7 @@ func (app *App) createWorkload(w http.ResponseWriter, r *http.Request) {
 		Priority:        req.Priority,
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
+		Resumable:       req.Resumable,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "create_workload_failed")
