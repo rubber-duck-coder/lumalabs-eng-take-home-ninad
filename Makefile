@@ -1,4 +1,4 @@
-.PHONY: unit integration e2e verify run frontend-install frontend-dev frontend-build compose-up compose-down
+.PHONY: unit integration e2e verify run frontend-install frontend-dev frontend-build compose-up compose-down vm-deploy
 
 unit:
 	go test ./...
@@ -29,3 +29,8 @@ compose-up:
 
 compose-down:
 	docker compose down -v
+
+vm-deploy:
+	git pull --ff-only
+	docker compose up --build -d --remove-orphans
+	docker compose ps
