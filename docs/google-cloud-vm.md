@@ -15,6 +15,7 @@ The deployment shape is:
 - A public external IP.
 - Firewall rule allowing inbound `tcp:80` to the VM.
 - SSH access to the VM.
+- `git`, `make`, and Docker installed on the VM.
 
 ## Install Docker
 
@@ -22,7 +23,7 @@ On the VM:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y ca-certificates curl gnupg
+sudo apt-get install -y ca-certificates curl gnupg git make
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker "$USER"
 newgrp docker
@@ -50,8 +51,7 @@ API_PORT=8080
 Then start the stack:
 
 ```bash
-docker compose up --build -d
-docker compose ps
+make vm-deploy
 ```
 
 ## Verify
