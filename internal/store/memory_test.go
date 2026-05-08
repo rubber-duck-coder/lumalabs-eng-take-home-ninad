@@ -879,6 +879,91 @@ func TestScheduleWorkloadPreemptsLowerPriorityRunningWorkload(t *testing.T) {
 	}
 }
 
+func TestScheduleWorkloadRebalancesSamePriorityBatchForInferenceDemandShift(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, err := store.CreateNode(domain.Node{
+		ID:                 "node-1",
+		GPUType:            "A100",
+		TotalGPUs:          4,
+		AllocatedGPUs:      4,
+		Health:             domain.NodeHealthHealthy,
+		CapacityClass:      domain.CapacityClassOnDemand,
+		RunningWorkloadIDs: []string{"batch-1"},
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	_, err = store.CreateWorkload(domain.Workload{
+		ID:          "batch-1",
+		Type:        domain.WorkloadTypeBatch,
+		GPUType:     "A100",
+		GPUCount:    4,
+		Priority:    domain.WorkloadPriorityNormal,
+		State:       domain.WorkloadStateRunning,
+		Placement:   &domain.Placement{NodeID: "node-1"},
+		SubmittedAt: now,
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create batch workload: %v", err)
+	}
+	_, err = store.CreateWorkload(domain.Workload{
+		ID:          "infer-1",
+		Type:        domain.WorkloadTypeInference,
+		GPUType:     "A100",
+		GPUCount:    4,
+		Priority:    domain.WorkloadPriorityNormal,
+		State:       domain.WorkloadStatePending,
+		SubmittedAt: now.Add(time.Minute),
+		UpdatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create inference workload: %v", err)
+	}
+
+	result, err := store.ScheduleWorkload("infer-1", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("schedule inference workload: %v", err)
+	}
+	if result.Decision.Outcome != scheduler.OutcomePlaced {
+		t.Fatalf("expected placed outcome, got %+v", result.Decision)
+	}
+	if !strings.Contains(result.Decision.Reason, "rebalanced 1 same-priority batch workload") {
+		t.Fatalf("expected rebalance reason, got %q", result.Decision.Reason)
+	}
+
+	infer, ok := store.GetWorkload("infer-1")
+	if !ok {
+		t.Fatal("expected inference workload")
+	}
+	if infer.State != domain.WorkloadStateRunning || infer.Placement == nil || infer.Placement.NodeID != "node-1" {
+		t.Fatalf("expected inference workload on node-1, got %+v", infer)
+	}
+
+	batch, ok := store.GetWorkload("batch-1")
+	if !ok {
+		t.Fatal("expected batch workload")
+	}
+	if batch.State != domain.WorkloadStatePending || batch.Placement != nil {
+		t.Fatalf("expected batch workload to be requeued, got %+v", batch)
+	}
+	if batch.StatusReason == "" || !strings.Contains(batch.StatusReason, "rebalanced") {
+		t.Fatalf("expected batch workload to record rebalance reason, got %+v", batch)
+	}
+
+	node, ok := store.GetNode("node-1")
+	if !ok {
+		t.Fatal("expected node")
+	}
+	if node.AllocatedGPUs != 4 || len(node.RunningWorkloadIDs) != 1 || node.RunningWorkloadIDs[0] != "infer-1" {
+		t.Fatalf("expected node to run only the inference workload, got %+v", node)
+	}
+}
+
 func TestScheduleWorkloadDoesNotPreemptEqualPriorityRunningWorkload(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)

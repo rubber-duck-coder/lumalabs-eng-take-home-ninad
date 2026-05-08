@@ -136,14 +136,14 @@ Acceptance:
 The current system now runs, schedules, persists state, and reacts to explicit node disruptions. The remaining gaps versus the original problem statement are:
 
 - The demo is not yet exercising the full set of behaviors through end-to-end scenarios and deployment docs.
-- The backend could still grow stronger rebalance actions beyond conservative pending-order policy if we decide the demo needs live movement of running workloads.
+- The backend can still grow stronger live rebalance actions if we decide the demo needs broader migration than the current same-priority batch reclaim path.
 - The frontend now has a left-side navigation split for user flow, admin dashboard, and admin ops, but the remaining UI work should stay focused on clarity rather than new surface area.
 
 Recommended follow-up sequence:
 
 1. Modularize the control plane into clearer internal responsibilities.
 2. Cover the implemented behaviors in E2E scenarios and submission docs.
-3. Decide whether the demo needs stronger rebalance actions beyond pending-order policy.
+3. Decide whether the demo needs stronger live rebalance actions beyond same-priority batch reclaim.
 
 ## Scheduling Strategy
 

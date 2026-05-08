@@ -416,6 +416,17 @@ func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (Scheduli
 		} else if ok {
 			return result, nil
 		}
+		if normalizeInferenceReplicas(workload.Replicas) == 1 {
+			queued := scheduler.Decision{
+				Outcome: scheduler.OutcomeQueued,
+				Reason:  inferenceQueueReason(workload),
+			}
+			if rebalancedResult, ok, err := s.trySamePriorityBatchRebalanceLocked(workload, now, queued); err != nil {
+				return SchedulingResult{}, err
+			} else if ok {
+				return rebalancedResult, nil
+			}
+		}
 
 		queued := cloneWorkload(workload)
 		queued.Replicas = normalizeInferenceReplicas(workload.Replicas)
@@ -446,6 +457,11 @@ func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (Scheduli
 			return SchedulingResult{}, err
 		} else if ok {
 			return preemptedResult, nil
+		}
+		if rebalancedResult, ok, err := s.trySamePriorityBatchRebalanceLocked(workload, now, decision); err != nil {
+			return SchedulingResult{}, err
+		} else if ok {
+			return rebalancedResult, nil
 		}
 		updated.State = domain.WorkloadStatePending
 		updated.Placement = nil
@@ -499,8 +515,8 @@ func (s *MemoryStore) scheduleInferenceWorkloadLocked(workload domain.Workload, 
 			return SchedulingResult{
 				Workload: cloneWorkload(workload),
 				Decision: scheduler.Decision{
-					Outcome: scheduler.OutcomeQueued,
-					Reason:  inferenceQueueReasonForPartial(workload, replicaIndex, replicas, decision.Reason),
+					Outcome:       scheduler.OutcomeQueued,
+					Reason:        inferenceQueueReasonForPartial(workload, replicaIndex, replicas, decision.Reason),
 					RejectedNodes: decision.RejectedNodes,
 				},
 			}, false, nil
@@ -611,6 +627,58 @@ func (s *MemoryStore) tryPriorityPreemptionLocked(workload domain.Workload, now 
 	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, true, nil
 }
 
+func (s *MemoryStore) trySamePriorityBatchRebalanceLocked(workload domain.Workload, now time.Time, originalDecision scheduler.Decision) (SchedulingResult, bool, error) {
+	if workload.Type == domain.WorkloadTypeBatch {
+		return SchedulingResult{}, false, nil
+	}
+
+	candidates := s.samePriorityBatchRebalanceCandidatesLocked(workload)
+	if len(candidates) == 0 {
+		return SchedulingResult{}, false, nil
+	}
+
+	selected := candidates[0]
+	node := s.nodes[selected.node.ID]
+	beforePlacement := toSchedulerNode(selected.node)
+
+	reason := fmt.Sprintf("rebalanced %d same-priority batch workload(s) on node %s for %s workload", len(selected.victims), node.ID, workload.Type)
+	affected := s.preemptWorkloadsOnNodeLocked(&node, selected.victims, now, reason)
+	if len(affected) != len(selected.victims) {
+		return SchedulingResult{}, false, ErrConflict
+	}
+
+	node.AllocatedGPUs += workload.GPUCount
+	if node.AllocatedGPUs > node.TotalGPUs {
+		return SchedulingResult{}, false, fmt.Errorf("%w: node over allocation", ErrConflict)
+	}
+	node.RunningWorkloadIDs = append(node.RunningWorkloadIDs, workload.ID)
+	node.UpdatedAt = now
+
+	updated := cloneWorkload(workload)
+	updated.State = domain.WorkloadStateRunning
+	updated.UpdatedAt = now
+	updated.StatusReason = reason
+	updated.SchedulingExplanation = reason
+	updated.Placement = &domain.Placement{
+		NodeID:     node.ID,
+		Region:     node.Region,
+		DataCenter: node.DataCenter,
+		Zone:       node.Zone,
+		Provider:   node.Provider,
+	}
+
+	s.nodes[node.ID] = cloneNode(node)
+	s.workloads[workload.ID] = cloneWorkload(updated)
+
+	decision := scheduler.Decision{
+		Outcome:       scheduler.OutcomePlaced,
+		SelectedNode:  &beforePlacement,
+		Reason:        reason,
+		RejectedNodes: originalDecision.RejectedNodes,
+	}
+	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, true, nil
+}
+
 func (s *MemoryStore) priorityPreemptionCandidatesLocked(workload domain.Workload) []preemptionCandidate {
 	candidates := make([]preemptionCandidate, 0)
 	for _, node := range s.nodes {
@@ -634,6 +702,67 @@ func (s *MemoryStore) priorityPreemptionCandidatesLocked(workload domain.Workloa
 		return candidates[i].node.ID < candidates[j].node.ID
 	})
 	return candidates
+}
+
+func (s *MemoryStore) samePriorityBatchRebalanceCandidatesLocked(workload domain.Workload) []preemptionCandidate {
+	candidates := make([]preemptionCandidate, 0)
+	for _, node := range s.nodes {
+		candidate, ok := s.buildSamePriorityBatchRebalanceCandidateLocked(workload, node)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if len(candidates[i].victims) != len(candidates[j].victims) {
+			return len(candidates[i].victims) < len(candidates[j].victims)
+		}
+		if candidates[i].reclaimedGPUs != candidates[j].reclaimedGPUs {
+			return candidates[i].reclaimedGPUs < candidates[j].reclaimedGPUs
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score < candidates[j].score
+		}
+		return candidates[i].node.ID < candidates[j].node.ID
+	})
+	return candidates
+}
+
+func (s *MemoryStore) buildSamePriorityBatchRebalanceCandidateLocked(workload domain.Workload, node domain.Node) (preemptionCandidate, bool) {
+	if node.Health != domain.NodeHealthHealthy {
+		return preemptionCandidate{}, false
+	}
+	if node.GPUType != workload.GPUType {
+		return preemptionCandidate{}, false
+	}
+	if !prioritySpotCompatible(workload, node) {
+		return preemptionCandidate{}, false
+	}
+
+	victims := s.selectBatchVictimsLocked(node.ID, workload.Priority, workload.GPUCount)
+	if len(victims) == 0 {
+		return preemptionCandidate{}, false
+	}
+
+	reclaimed := 0
+	for _, victim := range victims {
+		reclaimed += victim.GPUCount
+	}
+	if node.FreeGPUs()+reclaimed < workload.GPUCount {
+		return preemptionCandidate{}, false
+	}
+
+	candidateNode := cloneNode(node)
+	candidateNode.AllocatedGPUs = max(candidateNode.AllocatedGPUs-reclaimed, 0)
+	candidateNode.RunningWorkloadIDs = removeWorkloadIDs(candidateNode.RunningWorkloadIDs, victims)
+
+	return preemptionCandidate{
+		node:          candidateNode,
+		victims:       victims,
+		reclaimedGPUs: reclaimed,
+		score:         priorityPlacementScore(workload, candidateNode),
+	}, true
 }
 
 func (s *MemoryStore) buildPriorityPreemptionCandidateLocked(workload domain.Workload, node domain.Node) (preemptionCandidate, bool) {
@@ -670,6 +799,47 @@ func (s *MemoryStore) buildPriorityPreemptionCandidateLocked(workload domain.Wor
 		reclaimedGPUs: reclaimed,
 		score:         priorityPlacementScore(workload, candidateNode),
 	}, true
+}
+
+func (s *MemoryStore) selectBatchVictimsLocked(nodeID string, priority domain.WorkloadPriority, gpuCount int) []domain.Workload {
+	running := make([]domain.Workload, 0)
+	for _, workload := range s.workloads {
+		if workload.State != domain.WorkloadStateRunning {
+			continue
+		}
+		if workload.Type != domain.WorkloadTypeBatch {
+			continue
+		}
+		if !workloadTargetsNode(workload, nodeID) {
+			continue
+		}
+		if workload.Priority != priority {
+			continue
+		}
+		running = append(running, cloneWorkload(workload))
+	}
+
+	sort.SliceStable(running, func(i, j int) bool {
+		if running[i].GPUCount != running[j].GPUCount {
+			return running[i].GPUCount > running[j].GPUCount
+		}
+		if !running[i].SubmittedAt.Equal(running[j].SubmittedAt) {
+			return running[i].SubmittedAt.After(running[j].SubmittedAt)
+		}
+		return running[i].ID < running[j].ID
+	})
+
+	reclaimed := 0
+	victims := make([]domain.Workload, 0)
+	for _, workload := range running {
+		victims = append(victims, workload)
+		reclaimed += workload.GPUCount
+		if reclaimed >= gpuCount {
+			break
+		}
+	}
+
+	return victims
 }
 
 func (s *MemoryStore) selectPreemptableVictimsLocked(nodeID string, priority domain.WorkloadPriority, gpuCount int) []domain.Workload {
