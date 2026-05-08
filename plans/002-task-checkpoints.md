@@ -66,7 +66,7 @@ At every logical checkpoint, update:
 | T022 | 7 | Add Render deploy docs/config | infra agent | todo | T020 | Budget-safe deploy. |
 | T023 | 8 | Write `APPROACH.md` | coordinator | todo | core demo stable | Capture tradeoffs. |
 | T024 | 8 | Update README and video notes | coordinator | todo | T023 | Submission polish. |
-| T025 | 5 | Add Postgres-backed store | backend + infra | todo | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
+| T025 | 5 | Add Postgres-backed store | backend + infra | done | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
 
 ## Checkpoint Entries
 
@@ -359,6 +359,50 @@ Blockers:
 
 Resume note:
 - Next move is the Postgres-backed store migration.
+
+### 008: Postgres Runtime Migration
+
+Status: done
+
+Owner: coordinator
+
+Tasks:
+- Replaced the runtime store startup path with a Postgres-backed store when `DATABASE_URL` is present.
+- Bootstrapped schema creation automatically on startup.
+- Preserved seeded demo behavior through Postgres so the dashboard still starts with useful data.
+- Kept the in-memory store as a fallback for local dev without Postgres.
+
+Files:
+- `cmd/control-plane/main.go`
+- `go.mod`
+- `go.sum`
+- `internal/store/config.go`
+- `internal/store/postgres.go`
+- `internal/store/postgres_test.go`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `GOCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gocache GOMODCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gomodcache go test ./...`
+- `GOCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gocache GOMODCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gomodcache make verify`
+- `docker compose up --build -d`
+- `docker compose exec -T postgres psql -U postgres -d luma -c '\\dt'`
+- `curl -i -s http://localhost:8080/health`
+- `curl -i -s http://localhost:8080/nodes`
+- `curl -i -s -X POST http://localhost:8080/admin/demo/clear`
+- `curl -i -s -X POST http://localhost:8080/admin/demo/seed`
+- `curl -i -s http://localhost:8080/workloads`
+- `curl -i -s http://localhost:8080/events`
+
+Decisions:
+- Use Postgres for the demo/runtime path and keep CockroachDB as the production multi-region preference.
+- Bootstrap schema in code to keep fresh Compose startups frictionless for reviewers.
+- Reuse the existing deterministic in-memory business logic as the mutation engine and persist through Postgres for the demo scale.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Next step is the remaining E2E/deploy polish work once the database-backed runtime is settled.
 
 ## Template
 

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/gateway"
+	"github.com/ninadsindu/luma-gpu-control-plane/internal/store"
 )
 
 func main() {
@@ -14,9 +16,14 @@ func main() {
 		port = "8080"
 	}
 
+	appStore, err := store.NewConfiguredStore(context.Background())
+	if err != nil {
+		log.Fatalf("store init failed: %v", err)
+	}
+
 	server := &http.Server{
 		Addr:    ":" + port,
-		Handler: gateway.NewRouter(),
+		Handler: gateway.NewRouterWithStore(appStore),
 	}
 
 	log.Printf("control plane listening on :%s", port)
