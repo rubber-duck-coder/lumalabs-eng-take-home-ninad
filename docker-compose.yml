@@ -1,0 +1,38 @@
+services:
+  api:
+    build:
+      context: .
+    environment:
+      APP_ENV: local
+      PORT: "8080"
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/luma?sslmode=disable
+      SEED_DEMO_DATA: "true"
+      CORS_ALLOW_ORIGIN: http://localhost:5173,http://127.0.0.1:5173
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: luma
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

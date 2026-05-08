@@ -17,7 +17,7 @@ import (
 )
 
 type App struct {
-	store *store.MemoryStore
+	store store.Store
 	now   func() time.Time
 	seq   atomic.Uint64
 }
@@ -26,8 +26,8 @@ func NewRouter() http.Handler {
 	return NewRouterWithStore(store.NewSeededMemoryStore())
 }
 
-func NewRouterWithStore(memoryStore *store.MemoryStore) http.Handler {
-	app := &App{store: memoryStore, now: time.Now}
+func NewRouterWithStore(appStore store.Store) http.Handler {
+	app := &App{store: appStore, now: time.Now}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)

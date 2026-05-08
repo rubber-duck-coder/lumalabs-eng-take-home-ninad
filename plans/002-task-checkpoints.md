@@ -28,14 +28,14 @@ At every logical checkpoint, update:
 
 - Phase: Phase 5 local infra.
 - Last completed checkpoint: Phase 4 frontend shell + admin dashboard.
-- Active implementation: none; Phase 4 is complete and ready to commit.
-- Next recommended task: Phase 5 local infra.
+- Active implementation: dockerization scaffolding and Postgres-backed persistence next.
+- Next recommended task: implement the Postgres store and validate the compose stack.
 
 ## Decision Log Index
 
 - Backend runtime: Go modular monolith, logged in `rfcs/be/000-backend-rfc.md` and `rfcs/be/001-scalable-backend-runtime-and-state-rfc.md`.
 - External API: REST first, gRPC deferred until service split.
-- State: in-memory for skeleton, Postgres target when durable state is needed.
+- State: in-memory for skeleton only; Postgres for the demo/runtime path, CockroachDB for production multi-region durability.
 - Deployment target: Render first, Railway/Fly fallback.
 
 ## Task Board
@@ -60,12 +60,13 @@ At every logical checkpoint, update:
 | T016 | 4 | Add frontend dashboard shell | frontend agent | done | stable APIs | Implemented as React+Vite shell. |
 | T017 | 4 | Add workload submission UI | frontend agent | done | T009,T016 | Implemented against `/workloads`. |
 | T018 | 4 | Add admin dashboard sections | frontend agent | done | T010-T014,T016 | Fleet, utilization, events, disruptions. |
-| T019 | 5 | Add Dockerfile | infra agent | todo | T003,T016 | One app container preferred. |
-| T020 | 5 | Add Docker Compose | infra agent | todo | T019 | Local full stack. |
+| T019 | 5 | Add Dockerfile | infra agent | done | T003,T016 | One app container preferred. |
+| T020 | 5 | Add Docker Compose | infra agent | done | T019,T025 | Local full stack. |
 | T021 | 6 | Add parameterized E2E suite | test agent | todo | T016-T020 | Uses `BASE_URL`. |
 | T022 | 7 | Add Render deploy docs/config | infra agent | todo | T020 | Budget-safe deploy. |
 | T023 | 8 | Write `APPROACH.md` | coordinator | todo | core demo stable | Capture tradeoffs. |
 | T024 | 8 | Update README and video notes | coordinator | todo | T023 | Submission polish. |
+| T025 | 5 | Add Postgres-backed store | backend + infra | todo | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
 
 ## Checkpoint Entries
 
@@ -281,6 +282,44 @@ Blockers:
 
 Resume note:
 - Commit and push the Phase 4 frontend checkpoint.
+
+### 006: Phase 5 Dockerized Local Stack
+
+Status: done
+
+Owner: coordinator
+
+Tasks:
+- Added backend `Dockerfile`.
+- Added frontend `Dockerfile` and `nginx.conf`.
+- Added `docker-compose.yml` wiring the API, frontend, and Postgres services.
+- Added `.dockerignore` files for root and frontend build contexts.
+- Added `make compose-up` and `make compose-down` helpers.
+
+Files:
+- `Dockerfile`
+- `frontend/Dockerfile`
+- `frontend/nginx.conf`
+- `docker-compose.yml`
+- `.dockerignore`
+- `frontend/.dockerignore`
+- `Makefile`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `docker compose config`
+- `make verify`
+- `go test ./...` with repo-local `GOCACHE`/`GOMODCACHE`
+
+Decisions:
+- Keep the app split into API and frontend containers for now.
+- Wire Postgres into compose so the runtime can switch over cleanly when the store implementation lands.
+
+Blockers:
+- Postgres-backed store implementation still needs to land.
+
+Resume note:
+- Implement the Postgres store next, then switch the backend runtime to it.
 
 ## Template
 

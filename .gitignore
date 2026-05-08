@@ -22,6 +22,8 @@ dist/
 build/
 coverage/
 tmp/
+.gocache/
+.gomodcache/
 *.tsbuildinfo
 *.log
 

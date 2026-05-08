@@ -59,7 +59,7 @@ No secrets should be committed.
 - Prefer Dockerfile deploy if Docker is used locally.
 - Use `/health` for health checks.
 - Document cold-start behavior if using free tier.
-- Add managed Postgres only if in-memory or SQLite state blocks the demo.
+- Use managed Postgres for the demo/runtime path; reserve CockroachDB for production multi-region deployments.
 
 Alternatives:
 
@@ -111,7 +111,7 @@ BASE_URL=https://<render-app>.onrender.com make e2e
 ## Open Questions
 
 - Will Render free-tier cold starts affect E2E reliability?
-- Is in-memory state acceptable for deployed review?
+- Should the deployed demo use managed Postgres by default, with CockroachDB reserved for production multi-region deployments?
 - Should deploy be one service or split static frontend plus API?
 
 ## Technology Decisions
@@ -181,3 +181,24 @@ Alternatives:
 NFR fit:
 - Availability and reliability improve by reducing moving parts.
 - Maintainability is acceptable for take-home scale.
+
+### Database Choice: Postgres for Demo, CockroachDB for Production
+
+Decision: use managed Postgres for the demo/runtime path, and prefer CockroachDB if the product needs native multi-region production durability.
+
+Pros:
+- Postgres is easy to run locally and widely understood by reviewers.
+- CockroachDB preserves the same SQL shape while adding multi-region primitives.
+- The decision keeps the demo simple without locking out a production upgrade path.
+
+Cons:
+- CockroachDB is more operationally complex than Postgres.
+- The extra production preference adds another step to the platform story.
+
+Alternatives:
+- In-memory state: too fragile for the demo runtime.
+- SQLite: easy locally, but not the right operational model for a fleet control plane.
+
+NFR fit:
+- Demo operability improves with a real database.
+- Production resilience improves with a multi-region option.

@@ -157,7 +157,7 @@ Alternatives:
 NFR fit:
 - Availability: resettable demo state is acceptable if documented.
 - Testability: in-memory is best for unit/integration speed.
-- Deployment: Postgres is the target durable store when demo stability requires persistence.
+- Deployment: Postgres is the target durable store for the demo/runtime path; CockroachDB is the production preference when multi-region durability matters.
 
 ### Scheduler Execution: Explicit Tick
 
@@ -180,4 +180,4 @@ NFR fit:
 - Implement v1 as one Go process with clear internal modules: gateway, workloads, scheduler, fleet, events.
 - Keep REST as the external API.
 - Defer internal gRPC until services split.
-- Use in-memory state for the walking skeleton; prefer Postgres over SQLite when durable state is needed.
+- Use in-memory state only for the initial walking skeleton; prefer Postgres for the demo/runtime store and CockroachDB for production multi-region durability.

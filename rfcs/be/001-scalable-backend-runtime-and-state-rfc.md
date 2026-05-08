@@ -238,3 +238,5 @@ Initial extensibility requirements:
 - Rationale: preserves future service boundaries without adding distributed-system overhead before the product behavior is proven.
 - Decision: use REST externally and defer gRPC internally.
 - Rationale: REST is easier for frontend, E2E, and reviewer interaction; gRPC becomes useful only after service separation.
+- Decision: use Postgres for the demo/runtime database and CockroachDB for production multi-region durability.
+- Rationale: Postgres is the easiest operational fit for the take-home demo, while CockroachDB better matches the production requirement for native multi-region support.

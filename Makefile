@@ -1,4 +1,4 @@
-.PHONY: unit integration e2e verify run frontend-install frontend-dev frontend-build
+.PHONY: unit integration e2e verify run frontend-install frontend-dev frontend-build compose-up compose-down
 
 unit:
 	go test ./...
@@ -22,3 +22,9 @@ frontend-dev:
 
 frontend-build:
 	cd frontend && npm install && npm run build
+
+compose-up:
+	docker compose up --build
+
+compose-down:
+	docker compose down -v
