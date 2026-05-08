@@ -1,22 +1,20 @@
 package controlplane
 
 import (
-	"strconv"
-	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/domain"
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/events"
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/fleet"
 	"github.com/ninadsindu/luma-gpu-control-plane/internal/store"
+	"github.com/ninadsindu/luma-gpu-control-plane/internal/workloads"
 )
 
 type Service struct {
-	store store.Store
-	now   func() time.Time
-	evt   *events.Recorder
-	seq   atomic.Uint64
+	store     store.Store
+	now       func() time.Time
+	evt       *events.Recorder
+	workloads *workloads.Manager
 }
 
 type SubmitWorkloadRequest struct {
@@ -34,39 +32,26 @@ func New(appStore store.Store, now func() time.Time) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{store: appStore, now: now, evt: events.New(appStore, now)}
+	return &Service{store: appStore, now: now, evt: events.New(appStore, now), workloads: workloads.New(appStore, now)}
 }
 
 func (s *Service) SubmitWorkload(req SubmitWorkloadRequest) (domain.Workload, error) {
-	now := s.now().UTC()
-	workload := domain.Workload{
-		ID:              s.nextID("workload", now),
+	return s.workloads.Submit(workloads.SubmitRequest{
 		Type:            req.Type,
-		GPUType:         strings.ToUpper(req.GPUType),
+		GPUType:         req.GPUType,
 		GPUCount:        req.GPUCount,
 		Priority:        req.Priority,
 		DurationSeconds: req.DurationSeconds,
 		SpotTolerant:    req.SpotTolerant,
-		State:           domain.WorkloadStatePending,
-		SubmittedAt:     now,
-		UpdatedAt:       now,
-	}
-
-	created, err := s.store.CreateWorkload(workload)
-	if err != nil {
-		return domain.Workload{}, err
-	}
-
-	s.evt.Record("workload_submitted", "system", created.ID, "", "workload submitted", nil)
-	return s.scheduleWorkload(created.ID), nil
+	})
 }
 
 func (s *Service) GetWorkload(id string) (domain.Workload, bool) {
-	return s.store.GetWorkload(id)
+	return s.workloads.Get(id)
 }
 
 func (s *Service) ListWorkloads() []domain.Workload {
-	return s.store.ListWorkloads()
+	return s.workloads.List()
 }
 
 func (s *Service) ListNodes() []domain.Node {
@@ -82,13 +67,7 @@ func (s *Service) FleetSummary() FleetSummary {
 }
 
 func (s *Service) SchedulerTick() ([]store.SchedulingResult, error) {
-	results, err := s.store.SchedulePendingWorkloads(s.now().UTC())
-	if err != nil {
-		return nil, err
-	}
-	s.evt.Record("scheduler_tick", "scheduler", "", "", "scheduler tick completed", nil)
-	s.evt.RecordScheduledResults(results)
-	return results, nil
+	return s.workloads.SchedulerTick()
 }
 
 func (s *Service) SeedDemoData() (store.DemoDataSummary, error) {
@@ -129,25 +108,4 @@ func (s *Service) PreemptSpotNode(id string) (store.DisruptionResult, error) {
 	s.evt.RecordAffectedWorkloads("workload_preempted", result.AffectedWorkloads, result.Node.ID)
 	s.evt.RecordScheduledResults(result.Scheduled)
 	return result, nil
-}
-
-func (s *Service) scheduleWorkload(id string) domain.Workload {
-	workload, ok := s.store.GetWorkload(id)
-	if !ok {
-		return domain.Workload{}
-	}
-
-	now := s.now().UTC()
-	result, err := s.store.ScheduleWorkload(id, now)
-	if err != nil {
-		return workload
-	}
-
-	s.evt.RecordSchedulingEvent(result)
-	return result.Workload
-}
-
-func (s *Service) nextID(prefix string, now time.Time) string {
-	seq := s.seq.Add(1)
-	return prefix + "-" + strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.FormatUint(seq, 36)
 }

@@ -28,7 +28,7 @@ At every logical checkpoint, update:
 
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
-- Active implementation: control-plane module split and preemption contract next, with `events` and `fleet` now extracted.
+- Active implementation: control-plane module split and preemption contract next, with `events`, `fleet`, and `workloads` now extracted.
 - Next recommended task: continue modularizing the control plane into clear internal responsibility boundaries, define drain/checkpoint semantics for preemption, then implement inference scale-out, priority preemption, reconciliation, and rebalance policies.
 
 ## Decision Log Index
@@ -71,7 +71,7 @@ At every logical checkpoint, update:
 | T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | todo | T012-T025 | Simulate or ingest node health changes without manual admin clicks. |
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
-| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events` and `fleet` packages. |
+| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, and `workloads` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | todo | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 
 ## Checkpoint Entries
@@ -502,6 +502,35 @@ Decisions:
 
 Resume note:
 - Continue by splitting workload lifecycle and preemption policy away from the generic control-plane service.
+
+### 012: Workload Lifecycle Boundary
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Extracted workload submit, lookup, list, and scheduler-tick orchestration into `internal/workloads/manager.go`.
+- Kept `internal/controlplane/service.go` focused on fleet summary, node disruption, and admin coordination.
+- Added workload-manager tests for submit/schedule and pending tick flows.
+
+Files:
+- `internal/controlplane/service.go`
+- `internal/workloads/manager.go`
+- `internal/workloads/manager_test.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `go test ./internal/workloads ./internal/controlplane`
+
+Decisions:
+- Workload lifecycle is now a dedicated internal package rather than generic control-plane logic.
+- Event recording remains in the dedicated events package and is reused by workloads.
+- Control-plane service now mostly coordinates between workloads, fleet summary, node disruptions, and demo/admin actions.
+
+Resume note:
+- Next, isolate node disruption/preemption policy so workload lifecycle and fleet health boundaries remain separate.
 
 ## Template
 
