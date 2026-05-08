@@ -100,7 +100,38 @@ async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function formatError(reason: unknown) {
-  return reason instanceof Error ? reason.message : String(reason);
+  const message = reason instanceof Error ? reason.message : String(reason);
+  const lower = message.toLowerCase();
+  if (lower.includes("invalid_")) return "Check the form fields and try again.";
+  if (lower.includes("invalid disruption response")) return "The server returned an unexpected disruption response.";
+  if (lower.includes("request failed")) return "The backend request failed.";
+  if (lower.includes("not found")) return "The selected item is no longer available.";
+  return message;
+}
+
+function shortText(value: string, maxLength = 120) {
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function summarizeWorkloadReason(workload: Workload) {
+  if (workload.type === "inference" && (workload.replica_placements?.length ?? 0) > 1) {
+    return `${workload.replica_placements?.length ?? workload.replicas ?? 1} replicas placed`;
+  }
+  if (workload.placement?.node_id) {
+    return `Placed on ${workload.placement.node_id}`;
+  }
+  if (workload.status_reason) {
+    if (workload.state === "pending") {
+      return `Queued: ${shortText(workload.status_reason, 96)}`;
+    }
+    return shortText(workload.status_reason, 96);
+  }
+  if (workload.scheduling_explanation) {
+    return shortText(workload.scheduling_explanation, 96);
+  }
+  return "Queued";
 }
 
 function formatTimestamp(value: string) {
@@ -297,10 +328,11 @@ export function App() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setError("");
     setStatusMessage("");
     setSubmitting(true);
-    const data = new FormData(event.currentTarget);
+    const data = new FormData(form);
     const payload = {
       type: workloadType,
       gpu_type: String(data.get("gpu_type") ?? "A100"),
@@ -321,7 +353,7 @@ export function App() {
       setResult(created);
       setStatusMessage(`Submitted ${created.id} and refreshed the live fleet state.`);
       await refreshAll();
-      event.currentTarget.reset();
+      form.reset();
       setWorkloadType("training");
     } catch (err) {
       setError(formatError(err));
@@ -576,9 +608,9 @@ export function App() {
                         <span>Last submission</span>
                         <strong>{result.id}</strong>
                       </div>
-                      <div className="inline-card__body">
-                        <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
-                        <span>{result.type}</span>
+                    <div className="inline-card__body">
+                      <span className={`chip chip--${tone(result.state)}`}>{result.state}</span>
+                      <span>{result.type}</span>
                       <span>
                         {result.gpu_type} x {result.gpu_count}
                       </span>
@@ -637,28 +669,16 @@ export function App() {
                             <td className="mono">{workload.id}</td>
                             <td>{workload.type}</td>
                             <td>{workload.gpu_type}</td>
-                          <td>{workload.gpu_count}</td>
-                          <td>{workload.type === "inference" ? `${workload.replicas ?? 1}x` : "—"}</td>
-                          <td>{workload.priority}</td>
-                          <td>
-                            <span className={`chip chip--${tone(workload.state)}`}>{workload.state}</span>
-                          </td>
-                          <td className="cell-stack">
-                              {workload.placement?.node_id ? (
-                                <span className="mono">{workload.placement.node_id}</span>
-                              ) : (
-                                <span className="muted">{workload.status_reason || "Queued"}</span>
-                              )}
-                            {workload.scheduling_explanation && (
-                              <span className="muted">{workload.scheduling_explanation}</span>
-                            )}
-                            {workload.type === "inference" && (workload.replica_placements?.length ?? 0) > 1 && (
-                              <span className="muted">
-                                {workload.replica_placements?.length ?? workload.replicas ?? 1} replica placements
-                              </span>
-                            )}
-                            {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
-                              <div className="event-meta">
+                            <td>{workload.gpu_count}</td>
+                            <td>{workload.type === "inference" ? `${workload.replicas ?? 1}x` : "—"}</td>
+                            <td>{workload.priority}</td>
+                            <td>
+                              <span className={`chip chip--${tone(workload.state)}`}>{workload.state}</span>
+                            </td>
+                            <td className="cell-stack cell-stack--compact" title={summarizeWorkloadReason(workload)}>
+                              <span className="mono">{summarizeWorkloadReason(workload)}</span>
+                              {(workload.preempt_notice_seconds || workload.checkpoint_state || workload.resume_eligible) && (
+                                <div className="event-meta">
                                   {workload.preempt_notice_seconds ? (
                                     <span className="event-meta__item">{workload.preempt_notice_seconds}s notice</span>
                                   ) : null}
