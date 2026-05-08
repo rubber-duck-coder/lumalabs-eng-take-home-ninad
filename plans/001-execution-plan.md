@@ -245,7 +245,7 @@ Acceptance:
 Owner: infra coding agent with coordinator review.
 
 Deliver:
-- Render deployment config/docs.
+- Google Cloud VM deployment config/docs.
 - Deployed health check.
 - Deployed app URL.
 - Production env notes.
@@ -253,7 +253,7 @@ Deliver:
 Acceptance:
 - App deploys within budget.
 - `BASE_URL=<deployed-url> make e2e` passes.
-- Cold-start behavior documented if using free tier.
+- Cold-start behavior documented for the VM image/runtime.
 
 ## Phase 8: Submission Polish
 

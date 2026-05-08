@@ -26,17 +26,17 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Control-plane modularization before new behaviors.
-- Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
-- Active implementation: control-plane module split complete enough for the next behavior work, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
-- Next recommended task: add E2E coverage for the implemented behaviors or decide whether the demo needs stronger rebalance actions beyond the current pending-order policy.
+- Phase: Deployment readiness for a Google Cloud VM.
+- Last completed checkpoint: Phase 6 E2E coverage and stronger rebalance policy.
+- Active implementation: core behavior work is complete enough for deployment prep, including E2E coverage, replica-aware inference, checkpoint semantics, and conservative rebalance. VM-friendly same-origin API routing is now wired in the frontend and compose stack.
+- Next recommended task: complete Google Cloud VM deployment and verify the live URL with `BASE_URL=<deployed-url> make e2e`.
 
 ## Decision Log Index
 
 - Backend runtime: Go modular monolith, logged in `rfcs/be/000-backend-rfc.md` and `rfcs/be/001-scalable-backend-runtime-and-state-rfc.md`.
 - External API: REST first, gRPC deferred until service split.
 - State: in-memory for skeleton only; Postgres for the demo/runtime path, CockroachDB for production multi-region durability.
-- Deployment target: Render first, Railway/Fly fallback.
+- Deployment target: Google Cloud VM first, with containerized local parity already in place.
 
 ## Task Board
 
@@ -63,7 +63,7 @@ At every logical checkpoint, update:
 | T019 | 5 | Add Dockerfile | infra agent | done | T003,T016 | One app container preferred. |
 | T020 | 5 | Add Docker Compose | infra agent | done | T019,T025 | Local full stack. |
 | T021 | 6 | Add parameterized E2E suite | test agent | done | T016-T020 | Uses `BASE_URL`; current suite covers submit, disruption, and rebalance flows. |
-| T022 | 7 | Add Render deploy docs/config | infra agent | todo | T020 | Budget-safe deploy. |
+| T022 | 7 | Add Google Cloud VM deploy docs/config | infra agent | doing | T020 | Budget-safe VM deploy. Same-origin `/api` routing wired. |
 | T023 | 8 | Write `APPROACH.md` | coordinator | todo | core demo stable | Capture tradeoffs. |
 | T024 | 8 | Update README and video notes | coordinator | todo | T023 | Submission polish. |
 | T025 | 5 | Add Postgres-backed store | backend + infra | done | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
@@ -75,6 +75,7 @@ At every logical checkpoint, update:
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 | T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |
 | T033 | 4 | Revise frontend navigation and dashboard IA | frontend | done | T016-T018 | Add left-side navigation for user view, admin dashboard, and admin ops while keeping the existing live API flows. |
+| T034 | 7 | Prepare Google Cloud VM deployment flow | infra | doing | T019-T025,T021 | Container image, VM startup, and live URL verification. |
 
 ## Checkpoint Entries
 
@@ -98,7 +99,7 @@ Decisions:
 - Go modular monolith for backend v1.
 - REST external API.
 - In-memory first, Postgres target.
-- Render primary deployment target.
+- Google Cloud VM primary deployment target.
 
 Resume note:
 - Start at T001 with repo skeleton. Do not implement beyond Phase 0 until skeleton is reviewed or tests pass.
@@ -717,6 +718,37 @@ Decisions:
 
 Resume note:
 - Next backend work should focus on stronger rebalance actions or any remaining demand-shift gaps, not redoing the pending-order policy.
+
+### 019: E2E Coverage And Stronger Rebalance
+
+Status: done
+
+Owner: backend coding agent plus test agent
+
+Tasks:
+- Added a parameterized live E2E suite driven by `BASE_URL`.
+- Wired `make e2e` to run the live suite against a deployed or local URL.
+- Added a conservative same-priority batch reclaim path so inference demand shifts can reuse capacity without broad churn.
+
+Files:
+- `Makefile`
+- `e2e/e2e_test.go`
+- `internal/store/memory.go`
+- `internal/store/memory_test.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./...`
+- `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test -tags=e2e ./e2e/...`
+- `cd frontend && npm run build`
+
+Decisions:
+- The live E2E suite now covers submit, disruption, and rebalance flows.
+- Stronger rebalance is still conservative: it reclaims same-priority batch capacity for inference only, rather than moving arbitrary running workloads.
+
+Resume note:
+- Move next into Google Cloud VM deployment config, startup, and live URL verification.
 
 ## Template
 

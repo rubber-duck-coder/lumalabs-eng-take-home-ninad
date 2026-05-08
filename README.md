@@ -52,6 +52,8 @@ Docker is strongly encouraged. A `docker-compose.yml` that brings up the full st
 
 **If your project is deployable, deploy it.** A live URL, a dashboard, or a recorded demo of the system in action goes a long way. Include it in your APPROACH.md.
 
+Deployment runbook for the Google Cloud VM path: [docs/google-cloud-vm.md](docs/google-cloud-vm.md).
+
 A `.env.example` is included with stub keys for providers we have accounts with (Anthropic, OpenAI, Google Cloud, AWS). Copy it to `.env`, use whichever keys your solution needs, and document any others.
 
 ### 2. APPROACH.md

@@ -82,7 +82,7 @@ type DemoDataResult = {
   events: number;
 };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+const apiBase = import.meta.env.VITE_API_BASE_URL || "/api";
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, init);

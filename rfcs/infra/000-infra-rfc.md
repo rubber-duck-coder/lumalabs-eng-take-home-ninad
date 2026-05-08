@@ -14,10 +14,10 @@ Provide a fresh-checkout local setup, cheap deployment path, and repeatable veri
 
 ## Architecture Assumption
 
-- Prefer one containerized app serving API and UI.
-- Split services only if frontend/backend tooling makes one container awkward.
+- Prefer one public origin serving API and UI.
+- Split containers only if frontend/backend tooling makes one container awkward.
 - Local command: `docker compose up --build`.
-- Primary deploy target: Render.
+- Primary deploy target: Google Cloud VM running Docker Compose.
 - Target spend: `$0`; hard cap: `$100`.
 
 ## Local Development
@@ -55,15 +55,15 @@ No secrets should be committed.
 
 ## Deployment
 
-- Use Render Web Service with repo-based deploy.
+- Use a single VM with Docker Compose and a public Nginx frontend.
 - Prefer Dockerfile deploy if Docker is used locally.
 - Use `/health` for health checks.
-- Document cold-start behavior if using free tier.
+- Document VM startup and container boot timing.
 - Use managed Postgres for the demo/runtime path; reserve CockroachDB for production multi-region deployments.
 
 Alternatives:
 
-- Railway if Render blocks deployment.
+- Railway if the VM approach is blocked.
 - Fly.io if Docker deployment needs more control.
 
 ## Verification Commands
@@ -81,7 +81,7 @@ make verify
 
 ```bash
 BASE_URL=http://localhost:8080 make e2e
-BASE_URL=https://<render-app>.onrender.com make e2e
+BASE_URL=http://<vm-public-ip> make e2e
 ```
 
 ## E2E Scope
@@ -106,13 +106,12 @@ BASE_URL=https://<render-app>.onrender.com make e2e
 - Phase 1: Docker Compose, health endpoint, seed data, verify command.
 - Phase 2: scheduler test commands and local demo flow.
 - Phase 3: disruption demo and integration tests.
-- Phase 4: Render deploy and local/deployed E2E.
+- Phase 4: Google Cloud VM deploy and local/deployed E2E.
 
 ## Open Questions
 
-- Will Render free-tier cold starts affect E2E reliability?
 - Should the deployed demo use managed Postgres by default, with CockroachDB reserved for production multi-region deployments?
-- Should deploy be one service or split static frontend plus API?
+- Should the public origin be a single reverse-proxied frontend/API host, or should the frontend call the API directly?
 
 ## Technology Decisions
 
@@ -137,36 +136,37 @@ NFR fit:
 - Reliability: consistent environment reduces setup failures.
 - Maintainability: one local command keeps docs simple.
 
-### Deployment Target: Render First
+### Deployment Target: Google Cloud VM First
 
-Decision: use Render as primary deployment target.
+Decision: use a Google Cloud VM as the primary deployment target.
 
 Pros:
-- Official docs support free web services/static sites for preview use.
-- Simple Git-based deploy.
-- Built-in logs, health checks, env vars, and generated URL.
-- No dedicated domain required.
+- Full control over networking and runtime.
+- Simple Docker Compose deploy model matches local development.
+- One public URL can serve the frontend and proxy API calls.
+- No dependency on a hosted PaaS-specific deploy pipeline.
 
 Cons:
-- Free instances can cold start.
-- Free-tier limits are not production-grade.
+- More VM maintenance than a hosted PaaS.
+- Firewall and OS hardening are the operator's responsibility.
 
 Alternatives:
+- Render: simpler hosted deploy, but not the chosen path for this repo.
 - Railway: simple deploy, but free trial/credits are limited and verification can restrict network access.
 - Fly.io: strong Docker support, but current pricing is pay-as-you-go and has more operational knobs.
 
 NFR fit:
-- Cost: best fit for `$0` target under `$100` cap.
+- Cost: within budget for a single small VM.
 - Availability: enough for demo, not production.
-- Latency: cold starts are acceptable if documented and E2E uses health polling.
+- Latency: no hosted cold start, just VM startup and container boot.
 - Operability: logs and health checks are sufficient for review.
 
 ### Service Shape: One App First
 
-Decision: prefer one deployed service serving UI and API.
+Decision: prefer one public origin serving UI and API.
 
 Pros:
-- Avoids CORS and multi-service deploy coordination.
+- Avoids CORS and multi-service public deploy coordination.
 - Lower cost and simpler health checks.
 - Easier E2E target with one `BASE_URL`.
 
@@ -175,7 +175,7 @@ Cons:
 - Frontend/backend build pipeline must be coordinated.
 
 Alternatives:
-- Split static frontend plus API: cleaner separation, more deploy config.
+- Split static frontend plus API on separate public origins: cleaner separation, more deploy config.
 - API-only with FastAPI docs: fastest, but weaker user/admin experience.
 
 NFR fit:

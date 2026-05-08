@@ -11,7 +11,7 @@ Build a small GPU workload control plane that is runnable locally, deployable ch
 - React/Vite/TypeScript frontend only for reviewer-facing clarity.
 - Start with in-memory state for walking skeleton; move to Postgres for durable integration/E2E if needed.
 - Docker Compose for local development.
-- Render as primary deployment target; Railway/Fly only as fallback.
+- Google Cloud VM as primary deployment target; Railway/Fly only as fallback.
 - Explicit scheduler ticks instead of background timers for deterministic tests.
 
 ## High-Level Design
@@ -68,7 +68,7 @@ For v1, these services can be implemented as modules inside one Go process with 
 
 1. E2E test targets `BASE_URL`.
 2. Test submits workload, observes placement or queueing, triggers disruption, and verifies events/utilization.
-3. Same flow runs against local Docker and deployed Render URL.
+3. Same flow runs against local Docker and deployed VM URL.
 
 ## Milestones
 
@@ -118,7 +118,7 @@ Acceptance: reviewer can run the core demo without reading logs.
 
 ### 6. Deploy And E2E
 
-- Render deployment.
+- Google Cloud VM deployment.
 - Same E2E suite runs against local and deployed `BASE_URL`.
 - README and `APPROACH.md` document setup, tradeoffs, and limits.
 
