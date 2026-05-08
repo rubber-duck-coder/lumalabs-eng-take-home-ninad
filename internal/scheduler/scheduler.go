@@ -55,6 +55,9 @@ type Node struct {
 	AllocatedGPUs int
 	CapacityClass CapacityClass
 	Health        NodeHealth
+	Region        string
+	Zone          string
+	Provider      string
 }
 
 func (n Node) FreeGPUs() int {
@@ -109,7 +112,7 @@ func Decide(workload Workload, nodes []Node) Decision {
 
 		candidates = append(candidates, candidateNode{
 			node:       node,
-			classRank:  capacityPreference(workload, node),
+			score:      placementScore(workload, node),
 			surplusGPU: node.FreeGPUs() - workload.GPUCount,
 		})
 	}
@@ -123,8 +126,8 @@ func Decide(workload Workload, nodes []Node) Decision {
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].classRank != candidates[j].classRank {
-			return candidates[i].classRank < candidates[j].classRank
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score < candidates[j].score
 		}
 		if candidates[i].surplusGPU != candidates[j].surplusGPU {
 			return candidates[i].surplusGPU < candidates[j].surplusGPU
@@ -143,7 +146,7 @@ func Decide(workload Workload, nodes []Node) Decision {
 
 type candidateNode struct {
 	node       Node
-	classRank  int
+	score      int
 	surplusGPU int
 }
 
@@ -199,26 +202,56 @@ func spotCompatible(workload Workload, node Node) bool {
 	}
 }
 
-func capacityPreference(workload Workload, node Node) int {
+func placementScore(workload Workload, node Node) int {
 	switch workload.Type {
 	case WorkloadTypeTraining:
-		return 0
+		score := 0
+		if node.CapacityClass != CapacityClassOnDemand {
+			score += 1000
+		}
+		score += max(node.FreeGPUs()-workload.GPUCount, 0)
+		return score
 	case WorkloadTypeBatch:
 		if workload.SpotTolerant {
-			if node.CapacityClass == CapacityClassSpot {
-				return 0
+			score := 0
+			if node.CapacityClass != CapacityClassSpot {
+				score += 1000
 			}
-			return 1
+			score += max(node.FreeGPUs()-workload.GPUCount, 0)
+			return score
 		}
-		return 0
+		score := 0
+		if node.CapacityClass != CapacityClassOnDemand {
+			score += 1000
+		}
+		score += max(node.FreeGPUs()-workload.GPUCount, 0)
+		return score
 	case WorkloadTypeInference:
+		score := 0
 		if node.CapacityClass == CapacityClassOnDemand {
-			return 0
+			score += 0
+		} else {
+			score += 250
 		}
-		return 1
+		score += utilizationPenalty(node)
+		return score
 	default:
 		return 1
 	}
+}
+
+func utilizationPenalty(node Node) int {
+	if node.TotalGPUs <= 0 {
+		return 1000
+	}
+	return (node.AllocatedGPUs * 100) / node.TotalGPUs
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func placementReason(workload Workload, node Node) string {

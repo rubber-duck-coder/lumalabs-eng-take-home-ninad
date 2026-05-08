@@ -29,7 +29,7 @@ At every logical checkpoint, update:
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
 - Active implementation: control-plane module split complete enough for the next behavior work, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
-- Next recommended task: define the scheduling optimization strategy, then implement priority preemption, inference scale-out, and rebalance policies on top of the existing drain/checkpoint contract.
+- Next recommended task: implement priority preemption, inference scale-out, and rebalance policies on top of the existing drain/checkpoint contract.
 
 ## Decision Log Index
 
@@ -73,7 +73,7 @@ At every logical checkpoint, update:
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
 | T030 | 6 | Modularize control plane responsibilities | coordinator + backend | done | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
-| T032 | 6 | Define scheduling optimization strategy | backend | todo | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. |
+| T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |
 
 ## Checkpoint Entries
 
@@ -628,6 +628,38 @@ Decisions:
 
 Resume note:
 - Move next into class-aware scoring and priority preemption using the new contract fields as the policy input.
+
+### 016: Scheduling Strategy
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Added class-aware placement scoring to `internal/scheduler/scheduler.go`.
+- Made inference prefer less-utilized on-demand nodes.
+- Kept training and batch workloads on tighter eligible fits, with batch preferring spot when tolerated.
+- Added regression tests for the new inference placement bias.
+
+Files:
+- `internal/scheduler/scheduler.go`
+- `internal/scheduler/scheduler_test.go`
+- `internal/store/memory.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `go test ./internal/scheduler ./internal/store ./internal/workloads ./internal/fleet ./internal/reconciler ./internal/controlplane ./internal/gateway ./internal/domain`
+- `go test ./...`
+- `make verify`
+
+Decisions:
+- The scheduler now encodes the first explicit optimization strategy for the heterogeneous fleet.
+- Inference scheduling biases toward lower-utilization eligible on-demand capacity to leave headroom for latency-sensitive work.
+- Training and batch keep the anti-fragmentation bias by packing tightly on eligible nodes.
+
+Resume note:
+- Next step is to add explicit priority preemption policy on top of the existing placement strategy and checkpoint contract.
 
 ## Template
 

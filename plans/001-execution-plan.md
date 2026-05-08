@@ -188,6 +188,11 @@ Acceptance:
 - Workload-class behavior is explicit in tests.
 - Rebalance thresholds are deterministic and easy to tune.
 
+Current implementation:
+- Training keeps packing tight on eligible on-demand nodes.
+- Inference prefers less-utilized eligible on-demand capacity.
+- Batch prefers spot when tolerated and otherwise packs tightly on on-demand nodes.
+
 ## Phase 6: Control-Plane Modularization
 
 Owner: coordinator plus backend coding agents.

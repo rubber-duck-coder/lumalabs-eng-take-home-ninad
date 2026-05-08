@@ -741,6 +741,9 @@ func toSchedulerNodesLocked(nodes map[string]domain.Node) []scheduler.Node {
 			AllocatedGPUs: node.AllocatedGPUs,
 			CapacityClass: scheduler.CapacityClass(node.CapacityClass),
 			Health:        scheduler.NodeHealth(node.Health),
+			Region:        node.Region,
+			Zone:          node.Zone,
+			Provider:      node.Provider,
 		})
 	}
 	return out

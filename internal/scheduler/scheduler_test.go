@@ -100,6 +100,31 @@ func TestBatchSpotPreferenceAndInferenceOnDemandPreference(t *testing.T) {
 	}
 }
 
+func TestInferencePrefersLessUtilizedOnDemandNode(t *testing.T) {
+	workload := Workload{
+		ID:           "infer-spread",
+		Type:         WorkloadTypeInference,
+		GPUType:      "A100",
+		GPUCount:     1,
+		Priority:     PriorityNormal,
+		SubmittedAt:  time.Unix(250, 0),
+		SpotTolerant: true,
+	}
+
+	nodes := []Node{
+		{ID: "packed", GPUType: "A100", TotalGPUs: 8, AllocatedGPUs: 6, CapacityClass: CapacityClassOnDemand, Health: NodeHealthHealthy},
+		{ID: "spare", GPUType: "A100", TotalGPUs: 8, AllocatedGPUs: 1, CapacityClass: CapacityClassOnDemand, Health: NodeHealthHealthy},
+	}
+
+	decision := Decide(workload, nodes)
+	if decision.Outcome != OutcomePlaced {
+		t.Fatalf("expected placed outcome, got %s (%s)", decision.Outcome, decision.Reason)
+	}
+	if decision.SelectedNode == nil || decision.SelectedNode.ID != "spare" {
+		t.Fatalf("expected inference workload to prefer lower-utilization node, got %#v", decision.SelectedNode)
+	}
+}
+
 func TestTrainingRejectsSpotCapacityEvenWhenTolerated(t *testing.T) {
 	workload := Workload{
 		ID:           "train-1",
