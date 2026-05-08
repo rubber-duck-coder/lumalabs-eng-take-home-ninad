@@ -162,7 +162,8 @@ Current progress:
 - `controlplane` owns orchestration.
 - `events` and `fleet` are extracted as dedicated internal packages.
 - `workloads` is now extracted for submit, queue, and scheduler-tick orchestration.
-- The next boundary to isolate is node disruption and preemption policy.
+- `fleet` now also owns node disruption and preemption policy.
+- The next boundary to isolate is reconciliation versus pure disruption handling.
 
 Target module boundaries:
 - `gateway`: HTTP transport, request validation, response shaping.

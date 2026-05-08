@@ -532,6 +532,37 @@ Decisions:
 Resume note:
 - Next, isolate node disruption/preemption policy so workload lifecycle and fleet health boundaries remain separate.
 
+### 013: Fleet Disruption Boundary
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Extracted node failure, recovery, and spot preemption handling into `internal/fleet/manager.go`.
+- Kept `internal/controlplane/service.go` focused on delegating disruption requests and admin coordination.
+- Added fleet-manager tests for disruption event emission and summary aggregation.
+
+Files:
+- `internal/controlplane/service.go`
+- `internal/fleet/manager.go`
+- `internal/fleet/manager_test.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `go test ./internal/fleet ./internal/controlplane`
+- `go test ./...`
+- `make verify`
+
+Decisions:
+- Node disruption and preemption policy now live in a dedicated fleet package rather than the generic control-plane service.
+- The fleet package is now the home for node-level event emission and recovery behavior.
+- Control-plane service now coordinates workloads, fleet, and demo/admin flow only.
+
+Resume note:
+- Next step is to decide whether reconciliation should stay in the same fleet package or split into a dedicated simulator/reconciler boundary.
+
 ## Template
 
 ### NNN: Short Checkpoint Name
