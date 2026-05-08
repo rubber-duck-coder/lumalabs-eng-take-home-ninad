@@ -54,6 +54,50 @@ Docker is strongly encouraged. A `docker-compose.yml` that brings up the full st
 
 Deployment runbook for the Google Cloud VM path: [docs/google-cloud-vm.md](docs/google-cloud-vm.md).
 
+### Local Development And GCP Deployment Path
+
+This project was built iteratively in local Docker (`docker compose`) and then deployed to a Google Cloud VM for live verification.
+
+Local developer flow:
+
+```bash
+cp .env.example .env
+make compose-up
+make verify
+BASE_URL=http://localhost:5173 make e2e
+```
+
+GCP reviewer flow (requires `gcloud`, plus `GOOGLE_CLOUD_PROJECT` and a service-account JSON path):
+
+```bash
+export GOOGLE_CLOUD_PROJECT="<your-project-id>"
+export GCP_CREDENTIALS_FILE="<path-to-service-account-json>"
+
+# Optional overrides
+export GCP_VM_NAME="luma-take-home-review"
+export GCP_ZONE="us-west1-b"
+
+# One command to create VM, deploy the stack, and print shareable URL
+make gcp-vm-reviewer
+```
+
+If you already use the default Google credentials environment variable locally, point `GCP_CREDENTIALS_FILE` at the same JSON key path.
+
+What `make gcp-vm-reviewer` does:
+- Authenticates and sets gcloud project.
+- Creates a VM if it does not already exist.
+- SSHes into the VM, installs required tools (`git`, `make`, Docker), clones/pulls this repo, and runs `docker compose up --build -d`.
+- Prints a shareable URL like `http://<EXTERNAL_IP>` for team review.
+
+Additional helper commands:
+
+```bash
+make gcp-vm-create   # create/reuse VM
+make gcp-vm-ssh      # interactive SSH session
+make gcp-vm-deploy   # re-deploy latest main on VM
+make gcp-vm-url      # print external URL + health check
+```
+
 A `.env.example` is included with stub keys for providers we have accounts with (Anthropic, OpenAI, Google Cloud, AWS). Copy it to `.env`, use whichever keys your solution needs, and document any others.
 
 ### 2. APPROACH.md
