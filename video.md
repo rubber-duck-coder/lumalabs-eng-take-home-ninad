@@ -1,6 +1,8 @@
 # Video Walkthrough
 
-<replace with your Loom link or Google Drive URL>
+Video: https://drive.google.com/file/d/1W4ALtSgP8XJlFIabuxQR2JNrWMwI_1m4/view?usp=sharing
+
+Live demo: http://34.105.88.70/#user-view
 
 ## Transcript
 

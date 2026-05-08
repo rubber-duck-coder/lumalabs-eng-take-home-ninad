@@ -6,6 +6,10 @@ I built a runnable GPU workload control plane with a Go backend, Postgres persis
 
 The demo focuses on control-plane behavior rather than GPU execution. The GPU nodes are simulated, but scheduling, queueing, preemption, node failure, recovery, reconciliation, eventing, and telemetry all execute through real API and persistence paths.
 
+Live demo: http://34.105.88.70/#user-view
+
+Video walkthrough: https://drive.google.com/file/d/1W4ALtSgP8XJlFIabuxQR2JNrWMwI_1m4/view?usp=sharing
+
 ## How To Run
 
 ```bash
