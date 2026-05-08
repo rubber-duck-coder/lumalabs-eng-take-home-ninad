@@ -75,6 +75,70 @@ func TestListSeededNodes(t *testing.T) {
 	}
 }
 
+func TestSeedDemoDataEndpointPopulatesStore(t *testing.T) {
+	memoryStore := store.NewMemoryStore()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/demo/seed", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["action"] != "seed" {
+		t.Fatalf("expected seed action, got %+v", payload)
+	}
+	if got := int(payload["nodes"].(float64)); got != 6 {
+		t.Fatalf("expected 6 nodes, got %d", got)
+	}
+	if got := int(payload["workloads"].(float64)); got != 3 {
+		t.Fatalf("expected 3 workloads, got %d", got)
+	}
+	if got := int(payload["events"].(float64)); got != 2 {
+		t.Fatalf("expected 2 events, got %d", got)
+	}
+	if len(memoryStore.ListNodes()) != 6 || len(memoryStore.ListWorkloads()) != 3 || len(memoryStore.ListEvents()) != 2 {
+		t.Fatalf("expected seeded store state, got nodes=%d workloads=%d events=%d", len(memoryStore.ListNodes()), len(memoryStore.ListWorkloads()), len(memoryStore.ListEvents()))
+	}
+}
+
+func TestClearDemoDataEndpointEmptiesStore(t *testing.T) {
+	memoryStore := store.NewSeededMemoryStore()
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/demo/clear", nil)
+	rec := httptest.NewRecorder()
+	NewRouterWithStore(memoryStore).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d body=%s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload["action"] != "clear" {
+		t.Fatalf("expected clear action, got %+v", payload)
+	}
+	if got := int(payload["nodes"].(float64)); got != 6 {
+		t.Fatalf("expected 6 nodes cleared, got %d", got)
+	}
+	if got := int(payload["workloads"].(float64)); got != 3 {
+		t.Fatalf("expected 3 workloads cleared, got %d", got)
+	}
+	if got := int(payload["events"].(float64)); got != 2 {
+		t.Fatalf("expected 2 events cleared, got %d", got)
+	}
+	if len(memoryStore.ListNodes()) != 0 || len(memoryStore.ListWorkloads()) != 0 || len(memoryStore.ListEvents()) != 0 {
+		t.Fatalf("expected cleared store state, got nodes=%d workloads=%d events=%d", len(memoryStore.ListNodes()), len(memoryStore.ListWorkloads()), len(memoryStore.ListEvents()))
+	}
+}
+
 func TestCreateWorkloadSchedulesWhenCapacityExists(t *testing.T) {
 	body := bytes.NewBufferString(`{
 		"type":"batch",

@@ -61,6 +61,13 @@ type DisruptionResult = {
   scheduled?: Array<{ workload: Workload; decision?: { reason?: string } }>;
 };
 
+type DemoDataResult = {
+  action: "seed" | "clear";
+  nodes: number;
+  workloads: number;
+  events: number;
+};
+
 const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
 
 async function requestJSON<T>(path: string, init?: RequestInit): Promise<T> {
@@ -119,6 +126,7 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [adminAction, setAdminAction] = useState<NodeAction | null>(null);
+  const [demoAction, setDemoAction] = useState<"seed" | "clear" | null>(null);
   const [tickLoading, setTickLoading] = useState(false);
 
   async function refreshAll() {
@@ -256,6 +264,26 @@ export function App() {
     }
   }
 
+  async function handleDemoAction(action: "seed" | "clear") {
+    setError("");
+    setStatusMessage("");
+    setDemoAction(action);
+
+    try {
+      const response = await requestJSON<DemoDataResult>(`/admin/demo/${action}`, {
+        method: "POST"
+      });
+      setStatusMessage(
+        `${response.action === "seed" ? "Seeded" : "Cleared"} demo data: ${response.nodes} nodes, ${response.workloads} workloads, ${response.events} events.`
+      );
+      await refreshAll();
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setDemoAction(null);
+    }
+  }
+
   async function handleTick() {
     setError("");
     setStatusMessage("");
@@ -284,6 +312,20 @@ export function App() {
             </p>
           </div>
           <div className="hero__actions">
+            <button
+              className="button button--secondary"
+              onClick={() => handleDemoAction("seed")}
+              disabled={demoAction !== null || loading}
+            >
+              {demoAction === "seed" ? "Seeding..." : "Seed demo data"}
+            </button>
+            <button
+              className="button button--secondary"
+              onClick={() => handleDemoAction("clear")}
+              disabled={demoAction !== null || loading}
+            >
+              {demoAction === "clear" ? "Clearing..." : "Clear data"}
+            </button>
             <button
               className="button button--secondary"
               onClick={() => refreshAll().catch((err) => setError(formatError(err)))}

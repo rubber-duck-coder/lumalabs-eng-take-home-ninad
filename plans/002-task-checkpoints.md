@@ -321,6 +321,45 @@ Blockers:
 Resume note:
 - Implement the Postgres store next, then switch the backend runtime to it.
 
+### 007: Demo Data Seed/Clear Controls
+
+Status: done
+
+Owner: coordinator
+
+Tasks:
+- Added one-click admin dashboard buttons to seed and clear demo data.
+- Added in-memory demo dataset reset support on the backend.
+- Exposed `POST /admin/demo/seed` and `POST /admin/demo/clear` for the dashboard.
+- Seeded deterministic nodes, workloads, and event log entries so the UI starts with useful demo state.
+
+Files:
+- `frontend/src/App.tsx`
+- `internal/gateway/router.go`
+- `internal/gateway/router_test.go`
+- `internal/store/memory.go`
+- `internal/store/memory_test.go`
+- `internal/store/store.go`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `make verify`
+- `docker compose up --build -d`
+- `curl -i -s -X POST http://localhost:8080/admin/demo/seed`
+- `curl -i -s -X POST http://localhost:8080/admin/demo/clear`
+- `curl -sf http://localhost:8080/health`
+
+Decisions:
+- Keep demo reset operations local and deterministic.
+- Seed data should include both running and queued workloads so the dashboard has immediate contrast.
+- Clear should remove all in-memory state so admin users can return to a clean slate quickly.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Next move is the Postgres-backed store migration.
+
 ## Template
 
 ### NNN: Short Checkpoint Name

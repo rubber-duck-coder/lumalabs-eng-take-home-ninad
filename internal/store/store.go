@@ -7,6 +7,8 @@ import (
 )
 
 type Store interface {
+	SeedDemoData() (DemoDataSummary, error)
+	Clear() (DemoDataSummary, error)
 	CreateWorkload(workload domain.Workload) (domain.Workload, error)
 	GetWorkload(id string) (domain.Workload, bool)
 	ListWorkloads() []domain.Workload
@@ -24,6 +26,12 @@ type Store interface {
 	GetEvent(id string) (domain.Event, bool)
 	ListEvents() []domain.Event
 	UpdateEvent(id string, fn func(*domain.Event) error) (domain.Event, error)
+}
+
+type DemoDataSummary struct {
+	Nodes     int `json:"nodes"`
+	Workloads int `json:"workloads"`
+	Events    int `json:"events"`
 }
 
 var _ Store = (*MemoryStore)(nil)

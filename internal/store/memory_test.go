@@ -29,6 +29,66 @@ func TestSeededMemoryStoreNodes(t *testing.T) {
 	}
 }
 
+func TestSeedDemoDataPopulatesDeterministicFixture(t *testing.T) {
+	store := NewMemoryStore()
+
+	summary, err := store.SeedDemoData()
+	if err != nil {
+		t.Fatalf("seed demo data: %v", err)
+	}
+	if summary.Nodes != 6 || summary.Workloads != 3 || summary.Events != 2 {
+		t.Fatalf("unexpected seed summary: %+v", summary)
+	}
+
+	nodes := store.ListNodes()
+	if len(nodes) != 6 {
+		t.Fatalf("expected 6 seeded nodes, got %d", len(nodes))
+	}
+	workloads := store.ListWorkloads()
+	if len(workloads) != 3 {
+		t.Fatalf("expected 3 seeded workloads, got %d", len(workloads))
+	}
+	events := store.ListEvents()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 seeded events, got %d", len(events))
+	}
+
+	var running, pending int
+	for _, workload := range workloads {
+		switch workload.State {
+		case domain.WorkloadStateRunning:
+			running++
+		case domain.WorkloadStatePending:
+			pending++
+		}
+	}
+	if running != 1 || pending != 2 {
+		t.Fatalf("expected one running and two pending workloads, got running=%d pending=%d", running, pending)
+	}
+}
+
+func TestClearRemovesAllDemoData(t *testing.T) {
+	store := NewSeededMemoryStore()
+
+	summary, err := store.Clear()
+	if err != nil {
+		t.Fatalf("clear demo data: %v", err)
+	}
+	if summary.Nodes != 6 || summary.Workloads != 3 || summary.Events != 2 {
+		t.Fatalf("unexpected clear summary: %+v", summary)
+	}
+
+	if nodes := store.ListNodes(); len(nodes) != 0 {
+		t.Fatalf("expected no nodes after clear, got %d", len(nodes))
+	}
+	if workloads := store.ListWorkloads(); len(workloads) != 0 {
+		t.Fatalf("expected no workloads after clear, got %d", len(workloads))
+	}
+	if events := store.ListEvents(); len(events) != 0 {
+		t.Fatalf("expected no events after clear, got %d", len(events))
+	}
+}
+
 func TestStoreReturnsCopiesAndUpdates(t *testing.T) {
 	store := NewMemoryStore()
 

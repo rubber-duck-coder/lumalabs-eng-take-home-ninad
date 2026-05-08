@@ -23,9 +23,9 @@ type SchedulingResult struct {
 }
 
 type DisruptionResult struct {
-	Node              domain.Node         `json:"node"`
-	AffectedWorkloads []domain.Workload   `json:"affected_workloads"`
-	Scheduled         []SchedulingResult  `json:"scheduled"`
+	Node              domain.Node        `json:"node"`
+	AffectedWorkloads []domain.Workload  `json:"affected_workloads"`
+	Scheduled         []SchedulingResult `json:"scheduled"`
 }
 
 type MemoryStore struct {
@@ -45,9 +45,18 @@ func NewMemoryStore() *MemoryStore {
 
 func NewSeededMemoryStore() *MemoryStore {
 	store := NewMemoryStore()
-	base := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+	_, _ = store.SeedDemoData()
+	return store
+}
 
-	seedNodes := []domain.Node{
+func (s *MemoryStore) SeedDemoData() (DemoDataSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.resetLocked()
+	seedTime := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	nodes := []domain.Node{
 		{
 			ID:                 "node-a100-od-1",
 			GPUType:            "A100",
@@ -60,8 +69,8 @@ func NewSeededMemoryStore() *MemoryStore {
 			CapacityClass:      domain.CapacityClassOnDemand,
 			Health:             domain.NodeHealthHealthy,
 			RunningWorkloadIDs: []string{"workload-seed-train-1"},
-			CreatedAt:          base,
-			UpdatedAt:          base,
+			CreatedAt:          seedTime,
+			UpdatedAt:          seedTime,
 		},
 		{
 			ID:            "node-a100-spot-1",
@@ -74,8 +83,8 @@ func NewSeededMemoryStore() *MemoryStore {
 			Provider:      "aws",
 			CapacityClass: domain.CapacityClassSpot,
 			Health:        domain.NodeHealthHealthy,
-			CreatedAt:     base.Add(1 * time.Minute),
-			UpdatedAt:     base.Add(1 * time.Minute),
+			CreatedAt:     seedTime.Add(1 * time.Minute),
+			UpdatedAt:     seedTime.Add(1 * time.Minute),
 		},
 		{
 			ID:            "node-h100-od-1",
@@ -88,8 +97,8 @@ func NewSeededMemoryStore() *MemoryStore {
 			Provider:      "gcp",
 			CapacityClass: domain.CapacityClassOnDemand,
 			Health:        domain.NodeHealthHealthy,
-			CreatedAt:     base.Add(2 * time.Minute),
-			UpdatedAt:     base.Add(2 * time.Minute),
+			CreatedAt:     seedTime.Add(2 * time.Minute),
+			UpdatedAt:     seedTime.Add(2 * time.Minute),
 		},
 		{
 			ID:            "node-h100-spot-1",
@@ -102,8 +111,8 @@ func NewSeededMemoryStore() *MemoryStore {
 			Provider:      "gcp",
 			CapacityClass: domain.CapacityClassSpot,
 			Health:        domain.NodeHealthHealthy,
-			CreatedAt:     base.Add(3 * time.Minute),
-			UpdatedAt:     base.Add(3 * time.Minute),
+			CreatedAt:     seedTime.Add(3 * time.Minute),
+			UpdatedAt:     seedTime.Add(3 * time.Minute),
 		},
 		{
 			ID:            "node-l4-od-1",
@@ -116,8 +125,8 @@ func NewSeededMemoryStore() *MemoryStore {
 			Provider:      "azure",
 			CapacityClass: domain.CapacityClassOnDemand,
 			Health:        domain.NodeHealthRecovering,
-			CreatedAt:     base.Add(4 * time.Minute),
-			UpdatedAt:     base.Add(4 * time.Minute),
+			CreatedAt:     seedTime.Add(4 * time.Minute),
+			UpdatedAt:     seedTime.Add(4 * time.Minute),
 		},
 		{
 			ID:            "node-l4-spot-1",
@@ -130,16 +139,107 @@ func NewSeededMemoryStore() *MemoryStore {
 			Provider:      "azure",
 			CapacityClass: domain.CapacityClassSpot,
 			Health:        domain.NodeHealthHealthy,
-			CreatedAt:     base.Add(5 * time.Minute),
-			UpdatedAt:     base.Add(5 * time.Minute),
+			CreatedAt:     seedTime.Add(5 * time.Minute),
+			UpdatedAt:     seedTime.Add(5 * time.Minute),
 		},
 	}
-
-	for _, node := range seedNodes {
-		_, _ = store.CreateNode(node)
+	for _, node := range nodes {
+		s.nodes[node.ID] = cloneNode(node)
 	}
 
-	return store
+	workloads := []domain.Workload{
+		{
+			ID:                    "workload-seed-train-1",
+			Type:                  domain.WorkloadTypeTraining,
+			GPUType:               "A100",
+			GPUCount:              4,
+			Priority:              domain.WorkloadPriorityHigh,
+			DurationSeconds:       1800,
+			SpotTolerant:          true,
+			State:                 domain.WorkloadStateRunning,
+			Placement:             &domain.Placement{NodeID: "node-a100-od-1", Region: "us-west-2", DataCenter: "sfo-1", Zone: "usw2-az1", Provider: "aws"},
+			SchedulingExplanation: "placed on seeded on-demand capacity",
+			SubmittedAt:           seedTime.Add(-15 * time.Minute),
+			UpdatedAt:             seedTime.Add(-10 * time.Minute),
+		},
+		{
+			ID:                    "workload-seed-queue-1",
+			Type:                  domain.WorkloadTypeBatch,
+			GPUType:               "H100",
+			GPUCount:              12,
+			Priority:              domain.WorkloadPriorityNormal,
+			DurationSeconds:       900,
+			SpotTolerant:          false,
+			State:                 domain.WorkloadStatePending,
+			StatusReason:          "queued; waiting for a larger H100 fit",
+			SchedulingExplanation: "queued; waiting for a larger H100 fit",
+			SubmittedAt:           seedTime.Add(-8 * time.Minute),
+			UpdatedAt:             seedTime.Add(-8 * time.Minute),
+		},
+		{
+			ID:                    "workload-seed-spot-1",
+			Type:                  domain.WorkloadTypeInference,
+			GPUType:               "L4",
+			GPUCount:              1,
+			Priority:              domain.WorkloadPriorityLow,
+			DurationSeconds:       300,
+			SpotTolerant:          true,
+			State:                 domain.WorkloadStatePending,
+			StatusReason:          "queued for spot capacity",
+			SchedulingExplanation: "queued for spot capacity",
+			SubmittedAt:           seedTime.Add(-5 * time.Minute),
+			UpdatedAt:             seedTime.Add(-5 * time.Minute),
+		},
+	}
+	for _, workload := range workloads {
+		s.workloads[workload.ID] = cloneWorkload(workload)
+	}
+
+	events := []domain.Event{
+		{
+			ID:        "event-seed-1",
+			Timestamp: seedTime.Add(-4 * time.Minute),
+			Type:      "seed.demo_data_loaded",
+			Actor:     "system",
+			Message:   "demo data loaded into memory store",
+			Metadata: map[string]string{
+				"nodes":     "6",
+				"workloads": "3",
+			},
+		},
+		{
+			ID:         "event-seed-2",
+			Timestamp:  seedTime.Add(-3 * time.Minute),
+			Type:       "seed.demo_queue",
+			Actor:      "system",
+			WorkloadID: "workload-seed-queue-1",
+			Message:    "seeded queued workload for dashboard review",
+		},
+	}
+	for _, event := range events {
+		s.events[event.ID] = cloneEvent(event)
+	}
+
+	return DemoDataSummary{Nodes: len(nodes), Workloads: len(workloads), Events: len(events)}, nil
+}
+
+func (s *MemoryStore) Clear() (DemoDataSummary, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	summary := DemoDataSummary{
+		Nodes:     len(s.nodes),
+		Workloads: len(s.workloads),
+		Events:    len(s.events),
+	}
+	s.resetLocked()
+	return summary, nil
+}
+
+func (s *MemoryStore) resetLocked() {
+	s.workloads = make(map[string]domain.Workload)
+	s.nodes = make(map[string]domain.Node)
+	s.events = make(map[string]domain.Event)
 }
 
 func (s *MemoryStore) CreateWorkload(workload domain.Workload) (domain.Workload, error) {

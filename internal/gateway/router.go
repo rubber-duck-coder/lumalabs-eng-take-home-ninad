@@ -38,6 +38,8 @@ func NewRouterWithStore(appStore store.Store) http.Handler {
 	mux.HandleFunc("POST /workloads", app.createWorkload)
 	mux.HandleFunc("GET /workloads/{id}", app.getWorkload)
 	mux.HandleFunc("POST /scheduler/tick", app.schedulerTick)
+	mux.HandleFunc("POST /admin/demo/seed", app.seedDemoData)
+	mux.HandleFunc("POST /admin/demo/clear", app.clearDemoData)
 	mux.HandleFunc("POST /admin/nodes/{id}/fail", app.failNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/recover", app.recoverNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/preempt-spot", app.preemptSpotNode)
@@ -165,6 +167,29 @@ func (app *App) schedulerTick(w http.ResponseWriter, r *http.Request) {
 		app.recordSchedulingEvent(result)
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+type demoDataResponse struct {
+	Action string `json:"action"`
+	store.DemoDataSummary
+}
+
+func (app *App) seedDemoData(w http.ResponseWriter, r *http.Request) {
+	summary, err := app.store.SeedDemoData()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "seed_demo_data_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, demoDataResponse{Action: "seed", DemoDataSummary: summary})
+}
+
+func (app *App) clearDemoData(w http.ResponseWriter, r *http.Request) {
+	summary, err := app.store.Clear()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "clear_demo_data_failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, demoDataResponse{Action: "clear", DemoDataSummary: summary})
 }
 
 func (app *App) failNode(w http.ResponseWriter, r *http.Request) {
