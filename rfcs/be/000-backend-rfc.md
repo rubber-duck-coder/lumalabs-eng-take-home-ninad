@@ -82,7 +82,7 @@ Build a Go backend that models a simulated GPU fleet, accepts workload submissio
 - Node failure marks node failed, frees allocations, disrupts running workloads, emits events, and reruns scheduler.
 - Spot preemption applies to spot nodes, marks affected workloads preempted, requeues eligible work, emits events, and reruns scheduler.
 - Recovery marks node healthy, emits event, and reruns scheduler.
-- Keep retry behavior simple; no checkpointing or backoff.
+- Preemption is a protocol, not just a node state change: emit `preempt_notice`, mark `drain_started_at`, and persist checkpoint metadata when a workload declares itself resumable. Stateless inference should drain and retry rather than checkpoint.
 
 ## State
 
@@ -108,6 +108,7 @@ Build a Go backend that models a simulated GPU fleet, accepts workload submissio
 
 - Should high-priority work preempt running lower-priority work?
 - Should preempted workloads remain `preempted` or move back to `pending` with history?
+- Should checkpoint metadata live in workload state, event history, or both?
 - Is in-memory state acceptable for deployed review?
 
 ## Technology Decisions

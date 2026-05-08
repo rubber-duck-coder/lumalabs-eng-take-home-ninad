@@ -131,6 +131,50 @@ Acceptance:
 - Fresh checkout can run with `docker compose up --build`.
 - API and UI available at one local URL.
 
+## Missing Control-Plane Behaviors
+
+The current system now runs, schedules, persists state, and reacts to explicit node disruptions. The remaining gaps versus the original problem statement are:
+
+- Inference workloads are still modeled as single workloads, not horizontally scaled services or replica sets.
+- There is no explicit priority-preemption policy that reclaims capacity for a higher-priority workload before placement fails.
+- Node health changes are driven by manual admin actions only; there is no reconciliation loop or simulated health feed that changes fleet state over time.
+- Demand-shift handling is still basic; the control plane does not rebalance placement across GPU types, capacity classes, zones, or providers as workload mix changes.
+- The demo is not yet exercising those behaviors through end-to-end scenarios and deployment docs.
+
+Recommended follow-up sequence:
+
+1. Modularize the control plane into clearer internal responsibilities.
+2. Model inference scale-out and replica-aware placement.
+3. Add explicit priority preemption / capacity reclamation plus drain/checkpoint metadata.
+4. Add a reconciliation or simulation loop for node health changes.
+5. Add rebalance logic for demand shifts across the heterogeneous fleet.
+6. Cover the above in E2E scenarios and submission docs.
+
+## Phase 6: Control-Plane Modularization
+
+Owner: coordinator plus backend coding agents.
+
+Goal:
+- Keep one binary and one database, but split the control plane into explicit internal modules with single responsibilities.
+
+Target module boundaries:
+- `gateway`: HTTP transport, request validation, response shaping.
+- `workloads`: submit, queue, schedule, preempt, and lifecycle transitions.
+- `fleet`: node health, capacity, disruption, and reconciliation.
+- `scheduler`: pure placement and rebalance policy.
+- `events`: append-only audit trail and event fanout.
+- `store`: persistence adapters and transactional state loading/saving.
+- Preemption contract lives across `workloads`, `fleet`, and `events`; checkpoint execution remains a workload-runtime concern outside the control plane.
+
+Acceptance:
+- New behaviors can land without adding more policy to the gateway or persistence layer.
+- Scheduler remains a pure decision engine.
+- Fleet/Workload orchestration is testable without HTTP.
+- Postgres and memory adapters stay thin around shared orchestration logic.
+
+Parallelism:
+- Yes, once module seams are clear.
+
 ## Phase 6: E2E
 
 Owner: test/infra coding agent.

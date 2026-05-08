@@ -106,6 +106,14 @@ Keep REST as the external contract. Consider gRPC only later if modules split in
 - Durable event history for audit/debug.
 - Queryable by state, priority, tenant/team later, region, and placement.
 
+### Preemption And Resume Contract
+
+- Preemption should be explicit in the control plane contract, not an implicit kill.
+- Workloads may advertise whether they are resumable.
+- The control plane should persist `preempt_notice`, `drain_started_at`, `checkpoint_state`, and `resume_eligible` metadata when a workload is drained.
+- Stateless inference should prefer drain-and-retry; stateful workloads may checkpoint and resume later.
+- Checkpoint execution itself belongs to the workload runtime, not the scheduler.
+
 ### Fleet State
 
 - Frequent updates from many nodes/data centers.

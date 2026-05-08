@@ -26,10 +26,10 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Phase 5 local infra.
-- Last completed checkpoint: Phase 4 frontend shell + admin dashboard.
-- Active implementation: dockerization scaffolding and Postgres-backed persistence next.
-- Next recommended task: implement the Postgres store and validate the compose stack.
+- Phase: Control-plane modularization before new behaviors.
+- Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
+- Active implementation: control-plane module split and preemption contract next.
+- Next recommended task: continue modularizing the control plane into clear internal responsibility boundaries, define drain/checkpoint semantics for preemption, then implement inference scale-out, priority preemption, reconciliation, and rebalance policies.
 
 ## Decision Log Index
 
@@ -67,6 +67,12 @@ At every logical checkpoint, update:
 | T023 | 8 | Write `APPROACH.md` | coordinator | todo | core demo stable | Capture tradeoffs. |
 | T024 | 8 | Update README and video notes | coordinator | todo | T023 | Submission polish. |
 | T025 | 5 | Add Postgres-backed store | backend + infra | done | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
+| T026 | 6 | Add inference scale-out model | backend + frontend | todo | T009-T025 | Model replica-aware inference workloads and show horizontal scaling intent in the UI/API. |
+| T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
+| T028 | 6 | Add health reconciliation loop | backend + infra | todo | T012-T025 | Simulate or ingest node health changes without manual admin clicks. |
+| T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
+| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. |
+| T031 | 6 | Define preemption checkpoint contract | backend + frontend | todo | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 
 ## Checkpoint Entries
 
@@ -403,6 +409,69 @@ Blockers:
 
 Resume note:
 - Next step is the remaining E2E/deploy polish work once the database-backed runtime is settled.
+
+### 009: Control-Plane Modularization
+
+Status: todo
+
+Owner: coordinator
+
+Tasks:
+- Split the control plane into explicit internal modules for gateway, workloads, fleet, scheduler, events, and persistence.
+- Keep the system as one binary and one database while clarifying responsibilities.
+- Prepare the codebase for inference scale-out, priority preemption, reconciliation, and rebalance work.
+
+Files:
+- `internal/*`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- None yet.
+
+Decisions:
+- Modular monolith remains the right shape for now; no need to split into separate deployed services yet.
+- The next refactor should move policy out of transport and persistence adapters.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Refactor module boundaries before adding new scheduling behaviors.
+
+### 010: Gateway To Control-Plane Boundary
+
+Status: done
+
+Owner: coordinator plus backend coding agent
+
+Tasks:
+- Moved workload submission, scheduling orchestration, fleet summary, events, disruption handling, and demo seed/reset logic out of the HTTP layer into `internal/controlplane`.
+- Kept the gateway focused on request parsing, validation, and response shaping.
+- Preserved existing API behavior and test coverage.
+
+Files:
+- `internal/controlplane/service.go`
+- `internal/controlplane/service_test.go`
+- `internal/gateway/router.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `GOCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gocache GOMODCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gomodcache go test ./...`
+- `GOCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gocache GOMODCACHE=/Users/ninadsindu/Projects/luma-challenge/lumalabs-eng-take-home-ninad/.gomodcache make verify`
+- `docker compose up --build -d`
+- `curl -sf http://localhost:8080/health`
+
+Decisions:
+- Introduce a modular control-plane service before splitting storage or scheduler policy further.
+- Keep the control-plane service as a coordinator over existing store and scheduler behavior for now.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Continue modularizing by carving out clearer workloads/fleet/events responsibilities before adding new policy.
 
 ## Template
 

@@ -45,6 +45,7 @@ Build a minimal React/Vite/TypeScript UI that makes the control plane easy to ev
 - `POST /admin/nodes/{id}/fail`
 - `POST /admin/nodes/{id}/recover`
 - `POST /admin/nodes/{id}/preempt-spot`
+- `POST /admin/workloads/{id}/preempt` with checkpoint/drain metadata when the backend exposes it
 
 ## Explanation UX
 
@@ -55,6 +56,7 @@ Backend responses should include structured decision data:
 - `selected_node_id`: present when placed.
 - `rejected_nodes`: concise rejection reasons when queued.
 - `event_ids`: links to related events.
+- `preempt_notice_seconds`, `drain_started_at`, and checkpoint state for workloads that can survive disruption.
 
 UI should show short explanations inline and details on demand.
 
