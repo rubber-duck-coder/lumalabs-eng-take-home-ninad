@@ -28,7 +28,7 @@ At every logical checkpoint, update:
 
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
-- Active implementation: control-plane module split and preemption contract next.
+- Active implementation: control-plane module split and preemption contract next, with `events` and `fleet` now extracted.
 - Next recommended task: continue modularizing the control plane into clear internal responsibility boundaries, define drain/checkpoint semantics for preemption, then implement inference scale-out, priority preemption, reconciliation, and rebalance policies.
 
 ## Decision Log Index
@@ -71,7 +71,7 @@ At every logical checkpoint, update:
 | T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | todo | T012-T025 | Simulate or ingest node health changes without manual admin clicks. |
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
-| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. |
+| T030 | 6 | Modularize control plane responsibilities | coordinator + backend | doing | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events` and `fleet` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | todo | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 
 ## Checkpoint Entries
@@ -472,6 +472,36 @@ Blockers:
 
 Resume note:
 - Continue modularizing by carving out clearer workloads/fleet/events responsibilities before adding new policy.
+
+### 011: Events And Fleet Boundaries
+
+Status: done
+
+Owner: coordinator plus backend coding agents
+
+Tasks:
+- Extracted event recording into `internal/events/recorder.go`.
+- Extracted fleet summary aggregation into `internal/fleet/summary.go`.
+- Kept `internal/controlplane/service.go` focused on orchestration and lifecycle calls.
+
+Files:
+- `internal/controlplane/service.go`
+- `internal/events/recorder.go`
+- `internal/events/recorder_test.go`
+- `internal/fleet/summary.go`
+- `internal/fleet/summary_test.go`
+
+Tests run:
+- `go test ./...`
+- `make verify`
+
+Decisions:
+- Event emission is now a dedicated internal package rather than service-local helper code.
+- Fleet summary is now a pure aggregation helper rather than control-plane orchestration logic.
+- Control-plane service retains coordination across store, fleet, and event boundaries.
+
+Resume note:
+- Continue by splitting workload lifecycle and preemption policy away from the generic control-plane service.
 
 ## Template
 

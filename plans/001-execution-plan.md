@@ -157,6 +157,12 @@ Owner: coordinator plus backend coding agents.
 Goal:
 - Keep one binary and one database, but split the control plane into explicit internal modules with single responsibilities.
 
+Current progress:
+- `gateway` now stays at the transport boundary.
+- `controlplane` owns orchestration.
+- `events` and `fleet` are extracted as dedicated internal packages.
+- The next boundary to isolate is workload lifecycle and preemption policy.
+
 Target module boundaries:
 - `gateway`: HTTP transport, request validation, response shaping.
 - `workloads`: submit, queue, schedule, preempt, and lifecycle transitions.
