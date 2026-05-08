@@ -140,6 +140,7 @@ The current system now runs, schedules, persists state, and reacts to explicit n
 - Node health changes are driven by manual admin actions only; there is no reconciliation loop or simulated health feed that changes fleet state over time.
 - Demand-shift handling is still basic; the control plane does not rebalance placement across GPU types, capacity classes, zones, or providers as workload mix changes.
 - The demo is not yet exercising those behaviors through end-to-end scenarios and deployment docs.
+- The frontend now has a left-side navigation split for user flow, admin dashboard, and admin ops, but the remaining UI work should stay focused on clarity rather than new surface area.
 
 Recommended follow-up sequence:
 
@@ -192,6 +193,7 @@ Current implementation:
 - Training keeps packing tight on eligible on-demand nodes.
 - Inference prefers less-utilized eligible on-demand capacity.
 - Batch prefers spot when tolerated and otherwise packs tightly on on-demand nodes.
+- Priority preemption is now active in the store layer for higher-priority workloads when a fit exists only after eviction of lower-priority work.
 
 ## Phase 6: Control-Plane Modularization
 

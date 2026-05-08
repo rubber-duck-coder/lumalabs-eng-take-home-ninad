@@ -417,6 +417,11 @@ func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (Scheduli
 	updated.SchedulingExplanation = decision.Reason
 
 	if decision.Outcome == scheduler.OutcomeQueued {
+		if preemptedResult, ok, err := s.tryPriorityPreemptionLocked(workload, now, decision); err != nil {
+			return SchedulingResult{}, err
+		} else if ok {
+			return preemptedResult, nil
+		}
 		updated.State = domain.WorkloadStatePending
 		updated.Placement = nil
 		s.workloads[id] = cloneWorkload(updated)
@@ -454,6 +459,167 @@ func (s *MemoryStore) scheduleWorkloadLocked(id string, now time.Time) (Scheduli
 	s.nodes[node.ID] = cloneNode(node)
 	s.workloads[id] = cloneWorkload(updated)
 	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, nil
+}
+
+type preemptionCandidate struct {
+	node          domain.Node
+	victims       []domain.Workload
+	reclaimedGPUs int
+	score         int
+}
+
+func (s *MemoryStore) tryPriorityPreemptionLocked(workload domain.Workload, now time.Time, originalDecision scheduler.Decision) (SchedulingResult, bool, error) {
+	if priorityRank(workload.Priority) <= priorityRank(domain.WorkloadPriorityLow) {
+		return SchedulingResult{}, false, nil
+	}
+
+	candidates := s.priorityPreemptionCandidatesLocked(workload)
+	if len(candidates) == 0 {
+		return SchedulingResult{}, false, nil
+	}
+
+	selected := candidates[0]
+	node := s.nodes[selected.node.ID]
+	beforePlacement := toSchedulerNode(selected.node)
+
+	reason := fmt.Sprintf("preempted %d lower-priority workload(s) on node %s", len(selected.victims), node.ID)
+	affected := s.preemptWorkloadsOnNodeLocked(&node, selected.victims, now, reason)
+	if len(affected) != len(selected.victims) {
+		return SchedulingResult{}, false, ErrConflict
+	}
+
+	node.AllocatedGPUs += workload.GPUCount
+	if node.AllocatedGPUs > node.TotalGPUs {
+		return SchedulingResult{}, false, fmt.Errorf("%w: node over allocation", ErrConflict)
+	}
+	node.RunningWorkloadIDs = append(node.RunningWorkloadIDs, workload.ID)
+	node.UpdatedAt = now
+
+	updated := cloneWorkload(workload)
+	updated.State = domain.WorkloadStateRunning
+	updated.UpdatedAt = now
+	updated.StatusReason = reason
+	updated.SchedulingExplanation = reason
+	updated.Placement = &domain.Placement{
+		NodeID:     node.ID,
+		Region:     node.Region,
+		DataCenter: node.DataCenter,
+		Zone:       node.Zone,
+		Provider:   node.Provider,
+	}
+
+	s.nodes[node.ID] = cloneNode(node)
+	s.workloads[workload.ID] = cloneWorkload(updated)
+
+	decision := scheduler.Decision{
+		Outcome:       scheduler.OutcomePlaced,
+		SelectedNode:  &beforePlacement,
+		Reason:        reason,
+		RejectedNodes: originalDecision.RejectedNodes,
+	}
+	return SchedulingResult{Workload: cloneWorkload(updated), Decision: decision}, true, nil
+}
+
+func (s *MemoryStore) priorityPreemptionCandidatesLocked(workload domain.Workload) []preemptionCandidate {
+	candidates := make([]preemptionCandidate, 0)
+	for _, node := range s.nodes {
+		candidate, ok := s.buildPriorityPreemptionCandidateLocked(workload, node)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if len(candidates[i].victims) != len(candidates[j].victims) {
+			return len(candidates[i].victims) < len(candidates[j].victims)
+		}
+		if candidates[i].reclaimedGPUs != candidates[j].reclaimedGPUs {
+			return candidates[i].reclaimedGPUs < candidates[j].reclaimedGPUs
+		}
+		if candidates[i].score != candidates[j].score {
+			return candidates[i].score < candidates[j].score
+		}
+		return candidates[i].node.ID < candidates[j].node.ID
+	})
+	return candidates
+}
+
+func (s *MemoryStore) buildPriorityPreemptionCandidateLocked(workload domain.Workload, node domain.Node) (preemptionCandidate, bool) {
+	if node.Health != domain.NodeHealthHealthy {
+		return preemptionCandidate{}, false
+	}
+	if node.GPUType != workload.GPUType {
+		return preemptionCandidate{}, false
+	}
+	if !prioritySpotCompatible(workload, node) {
+		return preemptionCandidate{}, false
+	}
+
+	victims := s.selectPreemptableVictimsLocked(node.ID, workload.Priority, workload.GPUCount)
+	if len(victims) == 0 {
+		return preemptionCandidate{}, false
+	}
+
+	reclaimed := 0
+	for _, victim := range victims {
+		reclaimed += victim.GPUCount
+	}
+	if node.FreeGPUs()+reclaimed < workload.GPUCount {
+		return preemptionCandidate{}, false
+	}
+
+	candidateNode := cloneNode(node)
+	candidateNode.AllocatedGPUs = max(candidateNode.AllocatedGPUs-reclaimed, 0)
+	candidateNode.RunningWorkloadIDs = removeWorkloadIDs(candidateNode.RunningWorkloadIDs, victims)
+
+	return preemptionCandidate{
+		node:          candidateNode,
+		victims:       victims,
+		reclaimedGPUs: reclaimed,
+		score:         priorityPlacementScore(workload, candidateNode),
+	}, true
+}
+
+func (s *MemoryStore) selectPreemptableVictimsLocked(nodeID string, priority domain.WorkloadPriority, gpuCount int) []domain.Workload {
+	running := make([]domain.Workload, 0)
+	for _, workload := range s.workloads {
+		if workload.State != domain.WorkloadStateRunning {
+			continue
+		}
+		if workload.Placement == nil || workload.Placement.NodeID != nodeID {
+			continue
+		}
+		if priorityRank(workload.Priority) >= priorityRank(priority) {
+			continue
+		}
+		running = append(running, cloneWorkload(workload))
+	}
+
+	sort.SliceStable(running, func(i, j int) bool {
+		if priorityRank(running[i].Priority) != priorityRank(running[j].Priority) {
+			return priorityRank(running[i].Priority) < priorityRank(running[j].Priority)
+		}
+		if running[i].GPUCount != running[j].GPUCount {
+			return running[i].GPUCount > running[j].GPUCount
+		}
+		if !running[i].SubmittedAt.Equal(running[j].SubmittedAt) {
+			return running[i].SubmittedAt.After(running[j].SubmittedAt)
+		}
+		return running[i].ID < running[j].ID
+	})
+
+	reclaimed := 0
+	victims := make([]domain.Workload, 0)
+	for _, workload := range running {
+		victims = append(victims, workload)
+		reclaimed += workload.GPUCount
+		if reclaimed >= gpuCount {
+			break
+		}
+	}
+
+	return victims
 }
 
 func (s *MemoryStore) schedulePendingLocked(now time.Time) ([]SchedulingResult, error) {
@@ -648,6 +814,52 @@ func cloneSchedulingResults(results []SchedulingResult) []SchedulingResult {
 	return out
 }
 
+func (s *MemoryStore) preemptWorkloadsOnNodeLocked(node *domain.Node, victims []domain.Workload, now time.Time, reason string) []domain.Workload {
+	affected := make([]domain.Workload, 0, len(victims))
+	victimSet := make(map[string]struct{}, len(victims))
+	reclaimed := 0
+	for _, victim := range victims {
+		victimSet[victim.ID] = struct{}{}
+		reclaimed += victim.GPUCount
+	}
+
+	for workloadID, workload := range s.workloads {
+		if workload.State != domain.WorkloadStateRunning {
+			continue
+		}
+		if workload.Placement == nil || workload.Placement.NodeID != node.ID {
+			continue
+		}
+		if _, ok := victimSet[workloadID]; !ok {
+			continue
+		}
+
+		updated := cloneWorkload(workload)
+		updated.State = domain.WorkloadStatePending
+		updated.Placement = nil
+		updated.StatusReason = reason
+		updated.SchedulingExplanation = reason
+		updated.PreemptNoticeSeconds = 0
+		updated.DrainStartedAt = timePtr(now)
+		updated.CheckpointState = "drained"
+		updated.ResumeEligible = workload.Resumable
+		if workload.Resumable {
+			updated.CheckpointState = "checkpointed"
+		}
+		updated.UpdatedAt = now
+		s.workloads[workloadID] = cloneWorkload(updated)
+		affected = append(affected, cloneWorkload(updated))
+	}
+
+	if node.AllocatedGPUs < reclaimed {
+		node.AllocatedGPUs = 0
+	} else {
+		node.AllocatedGPUs -= reclaimed
+	}
+	node.RunningWorkloadIDs = removeWorkloadIDs(node.RunningWorkloadIDs, victims)
+	return affected
+}
+
 func (s *MemoryStore) evictNodeWorkloadsLocked(node *domain.Node, now time.Time, state domain.WorkloadState, reason string) []domain.Workload {
 	affected := make([]domain.Workload, 0)
 	for workloadID, workload := range s.workloads {
@@ -731,20 +943,117 @@ func toSchedulerPriority(priority domain.WorkloadPriority) scheduler.Priority {
 	}
 }
 
+func priorityRank(priority domain.WorkloadPriority) int {
+	switch priority {
+	case domain.WorkloadPriorityHigh:
+		return 3
+	case domain.WorkloadPriorityNormal:
+		return 2
+	default:
+		return 1
+	}
+}
+
 func toSchedulerNodesLocked(nodes map[string]domain.Node) []scheduler.Node {
 	out := make([]scheduler.Node, 0, len(nodes))
 	for _, node := range nodes {
-		out = append(out, scheduler.Node{
-			ID:            node.ID,
-			GPUType:       node.GPUType,
-			TotalGPUs:     node.TotalGPUs,
-			AllocatedGPUs: node.AllocatedGPUs,
-			CapacityClass: scheduler.CapacityClass(node.CapacityClass),
-			Health:        scheduler.NodeHealth(node.Health),
-			Region:        node.Region,
-			Zone:          node.Zone,
-			Provider:      node.Provider,
-		})
+		out = append(out, toSchedulerNode(node))
+	}
+	return out
+}
+
+func toSchedulerNode(node domain.Node) scheduler.Node {
+	return scheduler.Node{
+		ID:            node.ID,
+		GPUType:       node.GPUType,
+		TotalGPUs:     node.TotalGPUs,
+		AllocatedGPUs: node.AllocatedGPUs,
+		CapacityClass: scheduler.CapacityClass(node.CapacityClass),
+		Health:        scheduler.NodeHealth(node.Health),
+		Region:        node.Region,
+		Zone:          node.Zone,
+		Provider:      node.Provider,
+	}
+}
+
+func prioritySpotCompatible(workload domain.Workload, node domain.Node) bool {
+	switch workload.Type {
+	case domain.WorkloadTypeTraining:
+		return node.CapacityClass == domain.CapacityClassOnDemand
+	case domain.WorkloadTypeBatch:
+		if workload.SpotTolerant {
+			return true
+		}
+		return node.CapacityClass == domain.CapacityClassOnDemand
+	case domain.WorkloadTypeInference:
+		if node.CapacityClass == domain.CapacityClassOnDemand {
+			return true
+		}
+		return workload.SpotTolerant && node.CapacityClass == domain.CapacityClassSpot
+	default:
+		return false
+	}
+}
+
+func priorityPlacementScore(workload domain.Workload, node domain.Node) int {
+	switch workload.Type {
+	case domain.WorkloadTypeTraining:
+		score := 0
+		if node.CapacityClass != domain.CapacityClassOnDemand {
+			score += 1000
+		}
+		score += max(node.FreeGPUs()-workload.GPUCount, 0)
+		return score
+	case domain.WorkloadTypeBatch:
+		if workload.SpotTolerant {
+			score := 0
+			if node.CapacityClass != domain.CapacityClassSpot {
+				score += 1000
+			}
+			score += max(node.FreeGPUs()-workload.GPUCount, 0)
+			return score
+		}
+		score := 0
+		if node.CapacityClass != domain.CapacityClassOnDemand {
+			score += 1000
+		}
+		score += max(node.FreeGPUs()-workload.GPUCount, 0)
+		return score
+	case domain.WorkloadTypeInference:
+		score := 0
+		if node.CapacityClass == domain.CapacityClassOnDemand {
+			score += 0
+		} else {
+			score += 250
+		}
+		score += priorityUtilizationPenalty(node)
+		return score
+	default:
+		return 1
+	}
+}
+
+func priorityUtilizationPenalty(node domain.Node) int {
+	if node.TotalGPUs <= 0 {
+		return 1000
+	}
+	return (node.AllocatedGPUs * 100) / node.TotalGPUs
+}
+
+func removeWorkloadIDs(existing []string, victims []domain.Workload) []string {
+	if len(existing) == 0 || len(victims) == 0 {
+		return append([]string(nil), existing...)
+	}
+	toRemove := make(map[string]struct{}, len(victims))
+	for _, victim := range victims {
+		toRemove[victim.ID] = struct{}{}
+	}
+	out := make([]string, 0, len(existing))
+	for _, id := range existing {
+		if _, ok := toRemove[id]; ok {
+			continue
+		}
+		out = append(out, id)
 	}
 	return out
 }

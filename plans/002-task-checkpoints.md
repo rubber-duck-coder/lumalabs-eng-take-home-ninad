@@ -68,12 +68,13 @@ At every logical checkpoint, update:
 | T024 | 8 | Update README and video notes | coordinator | todo | T023 | Submission polish. |
 | T025 | 5 | Add Postgres-backed store | backend + infra | done | T009-T018 | Replace in-memory persistence for the demo/runtime path and wire `DATABASE_URL`. |
 | T026 | 6 | Add inference scale-out model | backend + frontend | todo | T009-T025 | Model replica-aware inference workloads and show horizontal scaling intent in the UI/API. |
-| T027 | 6 | Add priority preemption policy | backend | todo | T006-T025 | Reclaim capacity for higher-priority work before queueing. |
+| T027 | 6 | Add priority preemption policy | backend | done | T006-T025 | Reclaim capacity for higher-priority work before queueing. Current slice preempts lower-priority running workloads when a higher-priority fit exists. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | done | T012-T025 | Simulate or ingest node health changes without manual admin clicks. Current slice adds a background reconciler loop. |
 | T029 | 6 | Add demand-shift rebalance policy | backend | todo | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. |
 | T030 | 6 | Modularize control plane responsibilities | coordinator + backend | done | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 | T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |
+| T033 | 4 | Revise frontend navigation and dashboard IA | frontend | done | T016-T018 | Add left-side navigation for user view, admin dashboard, and admin ops while keeping the existing live API flows. |
 
 ## Checkpoint Entries
 
@@ -660,6 +661,36 @@ Decisions:
 
 Resume note:
 - Next step is to add explicit priority preemption policy on top of the existing placement strategy and checkpoint contract.
+
+### 017: Priority Preemption + Frontend Sidebar Refine
+
+Status: done
+
+Owner: backend coding agents plus frontend coding agent
+
+Tasks:
+- Added a deterministic higher-priority preemption path to the store scheduler.
+- Added tests for higher-priority preemption and equal-priority non-preemption.
+- Reworked the frontend into a left-side navigation rail with user view, admin dashboard, and admin ops anchors.
+
+Files:
+- `frontend/src/App.tsx`
+- `frontend/src/styles.css`
+- `internal/store/memory.go`
+- `internal/store/memory_test.go`
+- `plans/001-execution-plan.md`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- Frontend build completed in the worker branch.
+- Backend `go test ./...` completed in the worker branch.
+
+Decisions:
+- Priority preemption is implemented in the store layer, which keeps the Postgres-backed runtime path aligned because it delegates scheduling through the memory-state model.
+- The sidebar should be informational and structural, not a new control surface.
+
+Resume note:
+- Continue with inference scale-out and demand-shift rebalance work after this slice.
 
 ## Template
 
