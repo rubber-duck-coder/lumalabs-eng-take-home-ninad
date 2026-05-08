@@ -28,6 +28,33 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestCORSPreflight(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/workloads", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	rec := httptest.NewRecorder()
+
+	NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected status %d, got %d", http.StatusNoContent, rec.Code)
+	}
+	if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
+		t.Fatalf("expected wildcard cors header, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+	}
+}
+
+func TestCORSRejectsUnknownOriginPreflight(t *testing.T) {
+	req := httptest.NewRequest(http.MethodOptions, "/workloads", nil)
+	req.Header.Set("Origin", "https://malicious.example")
+	rec := httptest.NewRecorder()
+
+	NewRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, rec.Code)
+	}
+}
+
 func TestListSeededNodes(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/nodes", nil)
 	rec := httptest.NewRecorder()

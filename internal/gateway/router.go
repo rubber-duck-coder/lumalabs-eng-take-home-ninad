@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,7 +41,33 @@ func NewRouterWithStore(memoryStore *store.MemoryStore) http.Handler {
 	mux.HandleFunc("POST /admin/nodes/{id}/fail", app.failNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/recover", app.recoverNode)
 	mux.HandleFunc("POST /admin/nodes/{id}/preempt-spot", app.preemptSpotNode)
-	return mux
+	return withCORS(mux)
+}
+
+func withCORS(next http.Handler) http.Handler {
+	allowedOrigin := os.Getenv("CORS_ALLOW_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "http://localhost:5173"
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		allow := origin == "" || origin == allowedOrigin
+		if allow {
+			w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
+		if r.Method == http.MethodOptions {
+			if !allow {
+				writeError(w, http.StatusForbidden, "origin_not_allowed")
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {

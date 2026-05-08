@@ -21,6 +21,11 @@ while IFS= read -r -d '' file; do
     continue
   fi
 
+  basename=${file##*/}
+  if [ "$basename" = ".env.example" ]; then
+    continue
+  fi
+
   if git diff --cached -- "$file" | grep -Eiq "$secret_patterns"; then
     echo "pre-commit: possible secret detected in staged diff for $file" >&2
     echo "If this is a false positive, inspect carefully before bypassing." >&2

@@ -26,10 +26,10 @@ At every logical checkpoint, update:
 
 ## Current State
 
-- Phase: Phase 3 integration tests.
-- Last completed checkpoint: Phase 2 disruption APIs.
-- Active implementation: none.
-- Next recommended task: commit and push Phase 3 checkpoint, then ask permission before Phase 4.
+- Phase: Phase 5 local infra.
+- Last completed checkpoint: Phase 4 frontend shell + admin dashboard.
+- Active implementation: none; Phase 4 is complete and ready to commit.
+- Next recommended task: Phase 5 local infra.
 
 ## Decision Log Index
 
@@ -57,9 +57,9 @@ At every logical checkpoint, update:
 | T013 | 2 | Add spot preemption endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
 | T014 | 2 | Add node recovery endpoint | backend agent | done | T006,T008 | Implemented and adversarial-review fixes applied. |
 | T015 | 3 | Add API integration tests | test agent | done | T009-T014 | Implemented, reviewed, and validated. |
-| T016 | 4 | Add frontend dashboard shell | frontend agent | todo | stable APIs | Single page first. |
-| T017 | 4 | Add workload submission UI | frontend agent | todo | T009,T016 | Enterprise flow. |
-| T018 | 4 | Add admin dashboard sections | frontend agent | todo | T010-T014,T016 | Fleet, utilization, events, disruptions. |
+| T016 | 4 | Add frontend dashboard shell | frontend agent | done | stable APIs | Implemented as React+Vite shell. |
+| T017 | 4 | Add workload submission UI | frontend agent | done | T009,T016 | Implemented against `/workloads`. |
+| T018 | 4 | Add admin dashboard sections | frontend agent | done | T010-T014,T016 | Fleet, utilization, events, disruptions. |
 | T019 | 5 | Add Dockerfile | infra agent | todo | T003,T016 | One app container preferred. |
 | T020 | 5 | Add Docker Compose | infra agent | todo | T019 | Local full stack. |
 | T021 | 6 | Add parameterized E2E suite | test agent | todo | T016-T020 | Uses `BASE_URL`. |
@@ -242,6 +242,45 @@ Review notes:
 - Adversarial review 2 flagged medium gaps in node-state and event-linkage assertions.
 - Added stronger integration assertions for node health/allocation transitions and event attribution counts.
 - Re-ran `make unit` and `make integration`; both pass.
+
+### 005: Phase 4 Frontend Shell + Submit Flow
+
+Status: done
+
+Owner: coordinator
+
+Tasks:
+- Added standalone `frontend/` React+Vite+TypeScript app.
+- Implemented workload submit form and result panel.
+- Implemented workload list, fleet summary, node inventory, event log, and admin disruption controls.
+- Added backend CORS support for local cross-origin frontend dev.
+- Added Make targets for frontend install/dev/build and wired frontend build into `make verify`.
+
+Files:
+- `frontend/*`
+- `frontend/package-lock.json`
+- `frontend/src/vite-env.d.ts`
+- `internal/gateway/router.go`
+- `internal/gateway/router_test.go`
+- `Makefile`
+- `plans/002-task-checkpoints.md`
+
+Tests run:
+- `make unit`
+- `npm run build`
+- `make verify`
+
+Decisions:
+- Keep backend API-only; frontend runs as separate app.
+- Use dependency-light frontend stack aligned with RFC (`React + Vite + TypeScript`).
+- `make verify` now includes the frontend production build.
+- Frontend stays local-first and consumes only the backend API surface.
+
+Blockers:
+- None currently known.
+
+Resume note:
+- Commit and push the Phase 4 frontend checkpoint.
 
 ## Template
 
