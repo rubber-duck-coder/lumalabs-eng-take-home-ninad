@@ -372,6 +372,84 @@ func TestSchedulePendingWorkloadsOrdersByPriorityThenSubmission(t *testing.T) {
 	}
 }
 
+func TestSchedulePendingWorkloadsPrefersInferenceThenTrainingThenBatchWithinPriority(t *testing.T) {
+	store := NewMemoryStore()
+	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)
+
+	_, err := store.CreateNode(domain.Node{
+		ID:            "node-a",
+		GPUType:       "A100",
+		TotalGPUs:     6,
+		AllocatedGPUs: 0,
+		Health:        domain.NodeHealthHealthy,
+		CapacityClass: domain.CapacityClassOnDemand,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+
+	workloads := []domain.Workload{
+		{
+			ID:          "batch",
+			Type:        domain.WorkloadTypeBatch,
+			GPUType:     "A100",
+			GPUCount:    1,
+			Priority:    domain.WorkloadPriorityNormal,
+			State:       domain.WorkloadStatePending,
+			SubmittedAt: now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "training",
+			Type:        domain.WorkloadTypeTraining,
+			GPUType:     "A100",
+			GPUCount:    1,
+			Priority:    domain.WorkloadPriorityNormal,
+			State:       domain.WorkloadStatePending,
+			SubmittedAt: now.Add(1 * time.Minute),
+			UpdatedAt:   now,
+		},
+		{
+			ID:          "inference",
+			Type:        domain.WorkloadTypeInference,
+			GPUType:     "A100",
+			GPUCount:    1,
+			Priority:    domain.WorkloadPriorityNormal,
+			State:       domain.WorkloadStatePending,
+			SubmittedAt: now.Add(2 * time.Minute),
+			UpdatedAt:   now,
+		},
+	}
+	for _, workload := range workloads {
+		if _, err := store.CreateWorkload(workload); err != nil {
+			t.Fatalf("create workload %s: %v", workload.ID, err)
+		}
+	}
+
+	results, err := store.SchedulePendingWorkloads(now.Add(3 * time.Minute))
+	if err != nil {
+		t.Fatalf("schedule pending: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 scheduling results, got %d", len(results))
+	}
+
+	gotOrder := []string{results[0].Workload.ID, results[1].Workload.ID, results[2].Workload.ID}
+	wantOrder := []string{"inference", "training", "batch"}
+	for i := range wantOrder {
+		if gotOrder[i] != wantOrder[i] {
+			t.Fatalf("unexpected rebalance order: got=%v want=%v", gotOrder, wantOrder)
+		}
+	}
+	for _, result := range results {
+		if result.Decision.Outcome != scheduler.OutcomePlaced {
+			t.Fatalf("expected placed decision for %s, got %+v", result.Workload.ID, result.Decision)
+		}
+	}
+}
+
 func TestFailNodeFreesAllocationAndRequeuesWorkloads(t *testing.T) {
 	store := NewMemoryStore()
 	now := time.Date(2026, time.May, 7, 12, 0, 0, 0, time.UTC)

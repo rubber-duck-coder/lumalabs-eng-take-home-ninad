@@ -135,19 +135,15 @@ Acceptance:
 
 The current system now runs, schedules, persists state, and reacts to explicit node disruptions. The remaining gaps versus the original problem statement are:
 
-- There is no explicit priority-preemption policy that reclaims capacity for a higher-priority workload before placement fails.
-- Node health changes are driven by manual admin actions only; there is no reconciliation loop or simulated health feed that changes fleet state over time.
-- Demand-shift handling is still basic; the control plane does not rebalance placement across GPU types, capacity classes, zones, or providers as workload mix changes.
-- The demo is not yet exercising those behaviors through end-to-end scenarios and deployment docs.
+- The demo is not yet exercising the full set of behaviors through end-to-end scenarios and deployment docs.
+- The backend could still grow stronger rebalance actions beyond conservative pending-order policy if we decide the demo needs live movement of running workloads.
 - The frontend now has a left-side navigation split for user flow, admin dashboard, and admin ops, but the remaining UI work should stay focused on clarity rather than new surface area.
 
 Recommended follow-up sequence:
 
 1. Modularize the control plane into clearer internal responsibilities.
-2. Add explicit priority preemption / capacity reclamation plus drain/checkpoint metadata.
-3. Add a reconciliation or simulation loop for node health changes.
-4. Add rebalance logic for demand shifts across the heterogeneous fleet.
-5. Cover the above in E2E scenarios and submission docs.
+2. Cover the implemented behaviors in E2E scenarios and submission docs.
+3. Decide whether the demo needs stronger rebalance actions beyond pending-order policy.
 
 ## Scheduling Strategy
 

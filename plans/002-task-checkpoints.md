@@ -29,7 +29,7 @@ At every logical checkpoint, update:
 - Phase: Control-plane modularization before new behaviors.
 - Last completed checkpoint: Phase 5 local infra plus Postgres runtime migration.
 - Active implementation: control-plane module split complete enough for the next behavior work, with `events`, `fleet`, `workloads`, and `reconciler` now extracted.
-- Next recommended task: complete demand-shift rebalance policy and keep refining the control-plane boundaries around the already-implemented replica-aware inference and preemption flows.
+- Next recommended task: add E2E coverage for the implemented behaviors or decide whether the demo needs stronger rebalance actions beyond the current pending-order policy.
 
 ## Decision Log Index
 
@@ -70,7 +70,7 @@ At every logical checkpoint, update:
 | T026 | 6 | Add inference scale-out model | backend + frontend | done | T009-T025 | Model replica-aware inference workloads and show horizontal scaling intent in the UI/API. Current slice adds replica-aware inference placement and a user-facing replicas control. |
 | T027 | 6 | Add priority preemption policy | backend | done | T006-T025 | Reclaim capacity for higher-priority work before queueing. Current slice preempts lower-priority running workloads when a higher-priority fit exists. |
 | T028 | 6 | Add health reconciliation loop | backend + infra | done | T012-T025 | Simulate or ingest node health changes without manual admin clicks. Current slice adds a background reconciler loop. |
-| T029 | 6 | Add demand-shift rebalance policy | backend | doing | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. Current slice makes pending ordering class-aware within each priority tier. |
+| T029 | 6 | Add demand-shift rebalance policy | backend | done | T006-T025 | Rebalance placement across GPU types, providers, and zones as workload mix changes. Current slice makes pending ordering class-aware within each priority tier. |
 | T030 | 6 | Modularize control plane responsibilities | coordinator + backend | done | T025 | Split gateway, workloads, fleet, scheduler, events, and store into explicit internal modules. Current slice extracted `events`, `fleet`, `workloads`, and `reconciler` packages. |
 | T031 | 6 | Define preemption checkpoint contract | backend + frontend | done | T027-T030 | Add drain, checkpoint, and resumability semantics for workloads that can survive preemption. |
 | T032 | 6 | Define scheduling optimization strategy | backend | done | T027-T031 | Encode class-aware scoring, rebalance triggers, and anti-churn thresholds for heterogeneous fleets. Current implementation prefers tight packing for training/batch and lower-utilization on-demand nodes for inference. |
@@ -691,6 +691,32 @@ Decisions:
 
 Resume note:
 - Continue with inference scale-out and demand-shift rebalance work after this slice.
+
+### 018: Demand-Shift Rebalance Ordering
+
+Status: done
+
+Owner: backend coding agent
+
+Tasks:
+- Made pending workload ordering class-aware within each priority tier.
+- Added scheduler and store-level regression tests that prove inference work is preferred over training, then batch, with non-spot work preferred before spot-tolerant work.
+
+Files:
+- `internal/scheduler/scheduler.go`
+- `internal/scheduler/scheduler_test.go`
+- `internal/store/memory_test.go`
+
+Tests run:
+- `GOCACHE=$PWD/.gocache GOMODCACHE=$PWD/.gomodcache go test ./internal/scheduler ./internal/store ./internal/gateway ./internal/workloads ./internal/controlplane ./internal/fleet ./internal/reconciler ./internal/domain`
+- `cd frontend && npm run build`
+
+Decisions:
+- Demand-shift rebalance stays conservative and only changes the order in which pending work is admitted.
+- Running workloads are not moved for this slice.
+
+Resume note:
+- Next backend work should focus on stronger rebalance actions or any remaining demand-shift gaps, not redoing the pending-order policy.
 
 ## Template
 
